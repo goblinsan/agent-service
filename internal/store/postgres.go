@@ -42,7 +42,7 @@ func (p *Postgres) GetSession(ctx context.Context, id string) (*Session, error) 
 func (p *Postgres) CreateRun(ctx context.Context, r *Run) error {
 	_, err := p.db.ExecContext(ctx,
 		`INSERT INTO runs (id, session_id, prompt, status, response, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		r.ID, r.SessionID, r.Prompt, r.Status, r.Response, r.CreatedAt, r.UpdatedAt,
 	)
 	return err
