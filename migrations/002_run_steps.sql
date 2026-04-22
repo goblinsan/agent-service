@@ -6,3 +6,5 @@ CREATE TABLE IF NOT EXISTS run_steps (
     content     TEXT NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_run_steps_run_id ON run_steps(run_id, step_index);

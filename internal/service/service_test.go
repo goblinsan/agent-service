@@ -59,7 +59,13 @@ func (m *mockStore) CreateStep(_ context.Context, step *store.RunStep) error {
 }
 
 func (m *mockStore) ListSteps(_ context.Context, runID string) ([]*store.RunStep, error) {
-	return m.steps, nil
+	var result []*store.RunStep
+	for _, s := range m.steps {
+		if s.RunID == runID {
+			result = append(result, s)
+		}
+	}
+	return result, nil
 }
 
 type mockProvider struct {
