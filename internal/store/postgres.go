@@ -3,7 +3,11 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 )
+
+// ErrNotFound is returned when a requested record does not exist.
+var ErrNotFound = errors.New("not found")
 
 type Postgres struct {
 	db *sql.DB
@@ -26,6 +30,9 @@ func (p *Postgres) GetSession(ctx context.Context, id string) (*Session, error) 
 	err := p.db.QueryRowContext(ctx,
 		`SELECT id, name, description, created_at FROM sessions WHERE id = $1`, id,
 	).Scan(&s.ID, &s.Name, &s.Description, &s.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -46,6 +53,9 @@ func (p *Postgres) GetRun(ctx context.Context, id string) (*Run, error) {
 	err := p.db.QueryRowContext(ctx,
 		`SELECT id, session_id, prompt, status, response, created_at, updated_at FROM runs WHERE id = $1`, id,
 	).Scan(&r.ID, &r.SessionID, &r.Prompt, &r.Status, &r.Response, &r.CreatedAt, &r.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
 	if err != nil {
 		return nil, err
 	}

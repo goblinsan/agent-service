@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE TABLE IF NOT EXISTS runs (
     id          TEXT PRIMARY KEY,
-    session_id  TEXT NOT NULL REFERENCES sessions(id),
+    session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     prompt      TEXT NOT NULL,
     status      TEXT NOT NULL DEFAULT 'created',
     response    TEXT,

@@ -2,11 +2,13 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/goblinsan/agent-service/internal/service"
+	"github.com/goblinsan/agent-service/internal/sse"
 )
 
 func NewRouter(svc *service.Service) http.Handler {
@@ -43,7 +45,9 @@ func createSessionHandler(svc *service.Service) http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(sess)
+		if err := json.NewEncoder(w).Encode(sess); err != nil {
+			slog.Error("failed to encode session response", "error", err)
+		}
 	}
 }
 
@@ -68,6 +72,8 @@ func createRunHandler(svc *service.Service) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 
 		if err := svc.StartRun(r.Context(), sessionID, req.Prompt, w); err != nil {
+			slog.Error("run failed", "error", err)
+			_ = sse.Write(w, sse.Event{Type: "run.failed", Data: map[string]string{"error": err.Error()}})
 			return
 		}
 	}

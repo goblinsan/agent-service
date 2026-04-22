@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"time"
@@ -76,5 +78,9 @@ func (s *Service) StartRun(ctx context.Context, sessionID, prompt string, w http
 }
 
 func newID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }
