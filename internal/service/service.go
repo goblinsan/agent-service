@@ -19,8 +19,8 @@ type Service struct {
 	agent *agent.Agent
 }
 
-func New(s store.Store, p model.Provider) *Service {
-	return &Service{store: s, agent: agent.New(p, s, 10)}
+func New(s store.Store, p model.Provider, maxSteps int) *Service {
+	return &Service{store: s, agent: agent.New(p, s, maxSteps)}
 }
 
 func (s *Service) CreateSession(ctx context.Context, name, description string) (*store.Session, error) {

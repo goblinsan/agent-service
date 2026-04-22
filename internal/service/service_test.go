@@ -87,7 +87,7 @@ func (mp *mockProvider) Stream(_ context.Context, _ model.Request, onChunk func(
 
 func TestCreateSession(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms, &mockProvider{})
+	svc := service.New(ms, &mockProvider{}, 10)
 
 	sess, err := svc.CreateSession(context.Background(), "my session", "a description")
 	require.NoError(t, err)
@@ -101,7 +101,7 @@ func TestCreateSession(t *testing.T) {
 
 func TestStartRun(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms, &mockProvider{})
+	svc := service.New(ms, &mockProvider{}, 10)
 
 	rr := httptest.NewRecorder()
 	err := svc.StartRun(context.Background(), "sess-1", "test prompt", rr)
@@ -117,7 +117,7 @@ func TestStartRun(t *testing.T) {
 
 func TestStartRun_RunPersistedAsCompleted(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms, &mockProvider{})
+	svc := service.New(ms, &mockProvider{}, 10)
 
 	rr := httptest.NewRecorder()
 	err := svc.StartRun(context.Background(), "sess-1", "hello", rr)

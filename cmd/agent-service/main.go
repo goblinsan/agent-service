@@ -47,7 +47,7 @@ func main() {
 		provider = &noopProvider{}
 	}
 
-	svc := service.New(pg, provider)
+	svc := service.New(pg, provider, cfg.AgentMaxSteps)
 	router := api.NewRouter(svc)
 
 	srv := &http.Server{

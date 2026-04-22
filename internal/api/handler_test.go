@@ -77,7 +77,7 @@ func (mp *mockProvider) Stream(_ context.Context, _ model.Request, onChunk func(
 
 func TestCreateSession(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms, &mockProvider{})
+	svc := service.New(ms, &mockProvider{}, 10)
 	router := api.NewRouter(svc)
 
 	body := `{"name":"test session","description":"desc"}`
@@ -98,7 +98,7 @@ func TestCreateSession(t *testing.T) {
 
 func TestCreateSession_MissingName(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms, &mockProvider{})
+	svc := service.New(ms, &mockProvider{}, 10)
 	router := api.NewRouter(svc)
 
 	body := `{"description":"desc"}`
@@ -113,7 +113,7 @@ func TestCreateSession_MissingName(t *testing.T) {
 
 func TestCreateRun(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms, &mockProvider{})
+	svc := service.New(ms, &mockProvider{}, 10)
 	router := api.NewRouter(svc)
 
 	sess := &store.Session{ID: "sess-1", Name: "test", CreatedAt: time.Now()}
@@ -132,7 +132,7 @@ func TestCreateRun(t *testing.T) {
 
 func TestCreateRun_MissingPrompt(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms, &mockProvider{})
+	svc := service.New(ms, &mockProvider{}, 10)
 	router := api.NewRouter(svc)
 
 	body := `{}`

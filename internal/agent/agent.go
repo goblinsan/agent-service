@@ -31,6 +31,7 @@ func (a *Agent) Run(ctx context.Context, run *store.Run, w http.ResponseWriter) 
 		{Role: model.RoleUser, Content: run.Prompt},
 	}
 
+	// Steps are 1-based to align with human-readable step numbers in traces and SSE events.
 	for i := 1; i <= a.maxSteps; i++ {
 		resp, err := a.provider.Complete(ctx, model.Request{Messages: messages, MaxTokens: 512})
 		if err != nil {
