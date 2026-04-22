@@ -63,9 +63,19 @@ func (p *Postgres) GetRun(ctx context.Context, id string) (*Run, error) {
 }
 
 func (p *Postgres) UpdateRun(ctx context.Context, r *Run) error {
-	_, err := p.db.ExecContext(ctx,
+	res, err := p.db.ExecContext(ctx,
 		`UPDATE runs SET status = $1, response = $2, updated_at = $3 WHERE id = $4`,
 		r.Status, r.Response, r.UpdatedAt, r.ID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }

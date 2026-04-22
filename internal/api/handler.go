@@ -73,7 +73,7 @@ func createRunHandler(svc *service.Service) http.HandlerFunc {
 
 		if err := svc.StartRun(r.Context(), sessionID, req.Prompt, w); err != nil {
 			slog.Error("run failed", "error", err)
-			_ = sse.Write(w, sse.Event{Type: "run.failed", Data: map[string]string{"error": err.Error()}})
+			_ = sse.Write(w, sse.Event{Type: "run.failed", Data: map[string]string{"error": "run failed"}})
 			return
 		}
 	}

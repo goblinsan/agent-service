@@ -30,7 +30,11 @@ func (m *mockStore) CreateSession(_ context.Context, s *store.Session) error {
 }
 
 func (m *mockStore) GetSession(_ context.Context, id string) (*store.Session, error) {
-	return m.sessions[id], nil
+	s, ok := m.sessions[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return s, nil
 }
 
 func (m *mockStore) CreateRun(_ context.Context, r *store.Run) error {
