@@ -8,16 +8,19 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/goblinsan/agent-service/internal/agent"
+	"github.com/goblinsan/agent-service/internal/model"
 	"github.com/goblinsan/agent-service/internal/sse"
 	"github.com/goblinsan/agent-service/internal/store"
 )
 
 type Service struct {
 	store store.Store
+	agent *agent.Agent
 }
 
-func New(s store.Store) *Service {
-	return &Service{store: s}
+func New(s store.Store, p model.Provider) *Service {
+	return &Service{store: s, agent: agent.New(p, s, 10)}
 }
 
 func (s *Service) CreateSession(ctx context.Context, name, description string) (*store.Session, error) {
@@ -59,13 +62,12 @@ func (s *Service) StartRun(ctx context.Context, sessionID, prompt string, w http
 		return err
 	}
 
-	for i := 1; i <= 3; i++ {
-		if err := sse.Write(w, sse.Event{Type: "run.step", Data: map[string]interface{}{
-			"step":    i,
-			"message": fmt.Sprintf("processing step %d", i),
-		}}); err != nil {
-			return err
-		}
+	if err := s.agent.Run(ctx, run, w); err != nil {
+		run.Status = "failed"
+		run.UpdatedAt = time.Now().UTC()
+		_ = s.store.UpdateRun(ctx, run)
+		_ = sse.Write(w, sse.Event{Type: "run.failed", Data: run})
+		return fmt.Errorf("agent run: %w", err)
 	}
 
 	run.Status = "completed"

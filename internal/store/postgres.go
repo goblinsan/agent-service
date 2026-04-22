@@ -79,3 +79,32 @@ func (p *Postgres) UpdateRun(ctx context.Context, r *Run) error {
 	}
 	return nil
 }
+
+func (p *Postgres) CreateStep(ctx context.Context, step *RunStep) error {
+	_, err := p.db.ExecContext(ctx,
+		`INSERT INTO run_steps (id, run_id, step_index, role, content, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+		step.ID, step.RunID, step.Index, step.Role, step.Content, step.CreatedAt,
+	)
+	return err
+}
+
+func (p *Postgres) ListSteps(ctx context.Context, runID string) ([]*RunStep, error) {
+	rows, err := p.db.QueryContext(ctx,
+		`SELECT id, run_id, step_index, role, content, created_at FROM run_steps WHERE run_id = $1 ORDER BY step_index`,
+		runID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var steps []*RunStep
+	for rows.Next() {
+		s := &RunStep{}
+		if err := rows.Scan(&s.ID, &s.RunID, &s.Index, &s.Role, &s.Content, &s.CreatedAt); err != nil {
+			return nil, err
+		}
+		steps = append(steps, s)
+	}
+	return steps, rows.Err()
+}

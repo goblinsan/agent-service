@@ -15,6 +15,8 @@ import (
 
 	"github.com/goblinsan/agent-service/internal/api"
 	"github.com/goblinsan/agent-service/internal/config"
+	"github.com/goblinsan/agent-service/internal/model"
+	"github.com/goblinsan/agent-service/internal/model/llama"
 	"github.com/goblinsan/agent-service/internal/service"
 	"github.com/goblinsan/agent-service/internal/store"
 )
@@ -37,7 +39,15 @@ func main() {
 	defer db.Close()
 
 	pg := store.NewPostgres(db)
-	svc := service.New(pg)
+
+	var provider model.Provider
+	if cfg.LlamaURL != "" {
+		provider = llama.New(cfg.LlamaURL)
+	} else {
+		provider = &noopProvider{}
+	}
+
+	svc := service.New(pg, provider)
 	router := api.NewRouter(svc)
 
 	srv := &http.Server{
@@ -63,6 +73,16 @@ func main() {
 		slog.Error("shutdown error", "error", err)
 	}
 	slog.Info("server stopped")
+}
+
+type noopProvider struct{}
+
+func (n *noopProvider) Complete(_ context.Context, _ model.Request) (*model.Response, error) {
+	return &model.Response{Content: "No model configured.", FinishReason: "stop"}, nil
+}
+
+func (n *noopProvider) Stream(_ context.Context, _ model.Request, onChunk func(string) error) error {
+	return onChunk("No model configured.")
 }
 
 func connectWithRetry(dsn string, attempts int, delay time.Duration) (*sql.DB, error) {
