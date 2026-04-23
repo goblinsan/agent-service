@@ -22,6 +22,10 @@ func NewRouter(svc *service.Service) http.Handler {
 	r.Post("/sessions/{sessionID}/runs", createRunHandler(svc))
 	r.Get("/sessions/{sessionID}/runs/{runID}/events", runEventsHandler(svc))
 
+	r.Get("/approvals/{id}", getApprovalHandler(svc))
+	r.Post("/approvals/{id}/approve", approveHandler(svc))
+	r.Post("/approvals/{id}/deny", denyHandler(svc))
+
 	return r
 }
 
@@ -89,5 +93,47 @@ func runEventsHandler(svc *service.Service) http.HandlerFunc {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
+	}
+}
+
+func getApprovalHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		approval, err := svc.GetApproval(id)
+		if err != nil {
+			http.Error(w, `{"error":"approval not found"}`, http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(approval); err != nil {
+			slog.Error("failed to encode approval response", "error", err)
+		}
+	}
+}
+
+func approveHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if err := svc.ApproveApproval(id); err != nil {
+			http.Error(w, `{"error":"approval not found or already decided"}`, http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func denyHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		var req struct {
+			Reason string `json:"reason"`
+		}
+		// Reason is optional; ignore decode errors.
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if err := svc.DenyApproval(id, req.Reason); err != nil {
+			http.Error(w, `{"error":"approval not found or already decided"}`, http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }

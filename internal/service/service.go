@@ -10,17 +10,23 @@ import (
 
 	"github.com/goblinsan/agent-service/internal/agent"
 	"github.com/goblinsan/agent-service/internal/model"
+	"github.com/goblinsan/agent-service/internal/policy"
 	"github.com/goblinsan/agent-service/internal/sse"
 	"github.com/goblinsan/agent-service/internal/store"
 )
 
 type Service struct {
-	store store.Store
-	agent *agent.Agent
+	store     store.Store
+	agent     *agent.Agent
+	approvals *policy.Approvals
 }
 
 func New(s store.Store, p model.Provider, maxSteps int) *Service {
-	return &Service{store: s, agent: agent.New(p, s, maxSteps)}
+	return &Service{
+		store:     s,
+		agent:     agent.New(p, s, maxSteps),
+		approvals: policy.NewApprovals(),
+	}
 }
 
 func (s *Service) CreateSession(ctx context.Context, name, description string) (*store.Session, error) {
@@ -77,6 +83,29 @@ func (s *Service) StartRun(ctx context.Context, sessionID, prompt string, w http
 		return fmt.Errorf("update run completed: %w", err)
 	}
 	return sse.Write(w, sse.Event{Type: "run.completed", Data: run})
+}
+
+// RequestApproval creates a new pending approval for the given tool call and
+// returns the newly created Approval record. This is called by the agent when
+// a policy decision of RequireApproval is returned, and may also be used
+// directly for testing.
+func (s *Service) RequestApproval(toolName string, params map[string]any) *policy.Approval {
+	return s.approvals.Request(toolName, params)
+}
+
+// GetApproval returns the approval record for the given ID.
+func (s *Service) GetApproval(id string) (*policy.Approval, error) {
+	return s.approvals.Get(id)
+}
+
+// ApproveApproval marks the pending approval as approved.
+func (s *Service) ApproveApproval(id string) error {
+	return s.approvals.Approve(id)
+}
+
+// DenyApproval marks the pending approval as denied with the given reason.
+func (s *Service) DenyApproval(id, reason string) error {
+	return s.approvals.Deny(id, reason)
 }
 
 func newID() string {
