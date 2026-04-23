@@ -16,6 +16,7 @@ type Message struct {
 }
 
 type Request struct {
+	Model     string
 	Messages  []Message
 	MaxTokens int
 	Stream    bool

@@ -11,6 +11,12 @@ type Config struct {
 	LogLevel      string
 	LlamaURL      string
 	AgentMaxSteps int
+	// APIKey, when set, enables X-API-Key authentication on all API endpoints
+	// except /health and /metrics.
+	APIKey string
+	// MCPEndpoint, when set, enables the MCP tool runner and routes tool calls
+	// to the given Model Context Protocol server URL.
+	MCPEndpoint string
 }
 
 func Load() *Config {
@@ -30,5 +36,7 @@ func Load() *Config {
 		LogLevel:      os.Getenv("LOG_LEVEL"),
 		LlamaURL:      os.Getenv("LLAMA_URL"),
 		AgentMaxSteps: maxSteps,
+		APIKey:        os.Getenv("API_KEY"),
+		MCPEndpoint:   os.Getenv("MCP_ENDPOINT"),
 	}
 }
