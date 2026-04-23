@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/goblinsan/agent-service/internal/api"
+	"github.com/goblinsan/agent-service/internal/model"
 	"github.com/goblinsan/agent-service/internal/service"
 	"github.com/goblinsan/agent-service/internal/store"
 	"github.com/stretchr/testify/assert"
@@ -59,9 +60,24 @@ func (m *mockStore) UpdateRun(_ context.Context, r *store.Run) error {
 	return nil
 }
 
+func (m *mockStore) CreateStep(_ context.Context, _ *store.RunStep) error { return nil }
+func (m *mockStore) ListSteps(_ context.Context, _ string) ([]*store.RunStep, error) {
+	return nil, nil
+}
+
+type mockProvider struct{}
+
+func (mp *mockProvider) Complete(_ context.Context, _ model.Request) (*model.Response, error) {
+	return &model.Response{Content: "ok", FinishReason: "stop"}, nil
+}
+
+func (mp *mockProvider) Stream(_ context.Context, _ model.Request, onChunk func(string) error) error {
+	return onChunk("ok")
+}
+
 func TestCreateSession(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms)
+	svc := service.New(ms, &mockProvider{}, 10)
 	router := api.NewRouter(svc)
 
 	body := `{"name":"test session","description":"desc"}`
@@ -82,7 +98,7 @@ func TestCreateSession(t *testing.T) {
 
 func TestCreateSession_MissingName(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms)
+	svc := service.New(ms, &mockProvider{}, 10)
 	router := api.NewRouter(svc)
 
 	body := `{"description":"desc"}`
@@ -97,10 +113,9 @@ func TestCreateSession_MissingName(t *testing.T) {
 
 func TestCreateRun(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms)
+	svc := service.New(ms, &mockProvider{}, 10)
 	router := api.NewRouter(svc)
 
-	// First create a session
 	sess := &store.Session{ID: "sess-1", Name: "test", CreatedAt: time.Now()}
 	ms.sessions[sess.ID] = sess
 
@@ -117,7 +132,7 @@ func TestCreateRun(t *testing.T) {
 
 func TestCreateRun_MissingPrompt(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms)
+	svc := service.New(ms, &mockProvider{}, 10)
 	router := api.NewRouter(svc)
 
 	body := `{}`
@@ -129,3 +144,4 @@ func TestCreateRun_MissingPrompt(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
+

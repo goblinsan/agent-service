@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/goblinsan/agent-service/internal/model"
 	"github.com/goblinsan/agent-service/internal/service"
 	"github.com/goblinsan/agent-service/internal/store"
 	"github.com/stretchr/testify/assert"
@@ -15,6 +16,7 @@ import (
 type mockStore struct {
 	sessions map[string]*store.Session
 	runs     map[string]*store.Run
+	steps    []*store.RunStep
 }
 
 func newMockStore() *mockStore {
@@ -51,9 +53,41 @@ func (m *mockStore) UpdateRun(_ context.Context, r *store.Run) error {
 	return nil
 }
 
+func (m *mockStore) CreateStep(_ context.Context, step *store.RunStep) error {
+	m.steps = append(m.steps, step)
+	return nil
+}
+
+func (m *mockStore) ListSteps(_ context.Context, runID string) ([]*store.RunStep, error) {
+	var result []*store.RunStep
+	for _, s := range m.steps {
+		if s.RunID == runID {
+			result = append(result, s)
+		}
+	}
+	return result, nil
+}
+
+type mockProvider struct {
+	callCount int
+}
+
+func (mp *mockProvider) Complete(_ context.Context, _ model.Request) (*model.Response, error) {
+	mp.callCount++
+	finishReason := ""
+	if mp.callCount >= 3 {
+		finishReason = "stop"
+	}
+	return &model.Response{Content: "response", FinishReason: finishReason}, nil
+}
+
+func (mp *mockProvider) Stream(_ context.Context, _ model.Request, onChunk func(string) error) error {
+	return onChunk("chunk")
+}
+
 func TestCreateSession(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms)
+	svc := service.New(ms, &mockProvider{}, 10)
 
 	sess, err := svc.CreateSession(context.Background(), "my session", "a description")
 	require.NoError(t, err)
@@ -62,13 +96,12 @@ func TestCreateSession(t *testing.T) {
 	assert.Equal(t, "a description", sess.Description)
 	assert.NotZero(t, sess.CreatedAt)
 
-	// Verify persisted in store
 	assert.Contains(t, ms.sessions, sess.ID)
 }
 
 func TestStartRun(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms)
+	svc := service.New(ms, &mockProvider{}, 10)
 
 	rr := httptest.NewRecorder()
 	err := svc.StartRun(context.Background(), "sess-1", "test prompt", rr)
@@ -84,13 +117,12 @@ func TestStartRun(t *testing.T) {
 
 func TestStartRun_RunPersistedAsCompleted(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms)
+	svc := service.New(ms, &mockProvider{}, 10)
 
 	rr := httptest.NewRecorder()
 	err := svc.StartRun(context.Background(), "sess-1", "hello", rr)
 	require.NoError(t, err)
 
-	// Find the run in the mock store
 	var run *store.Run
 	for _, r := range ms.runs {
 		run = r
@@ -100,3 +132,4 @@ func TestStartRun_RunPersistedAsCompleted(t *testing.T) {
 	assert.Equal(t, "completed", run.Status)
 	assert.NotEmpty(t, run.Response)
 }
+

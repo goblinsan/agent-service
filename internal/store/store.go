@@ -22,10 +22,21 @@ type Run struct {
 	UpdatedAt time.Time
 }
 
+type RunStep struct {
+	ID        string
+	RunID     string
+	Index     int
+	Role      string
+	Content   string
+	CreatedAt time.Time
+}
+
 type Store interface {
 	CreateSession(ctx context.Context, s *Session) error
 	GetSession(ctx context.Context, id string) (*Session, error)
 	CreateRun(ctx context.Context, r *Run) error
 	GetRun(ctx context.Context, id string) (*Run, error)
 	UpdateRun(ctx context.Context, r *Run) error
+	CreateStep(ctx context.Context, step *RunStep) error
+	ListSteps(ctx context.Context, runID string) ([]*RunStep, error)
 }
