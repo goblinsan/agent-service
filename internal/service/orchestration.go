@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -126,6 +127,15 @@ func (s *Service) StartChatRun(ctx context.Context, req *ChatRunRequest, w http.
 		return fmt.Errorf("create run: %w", err)
 	}
 
+	slog.Info("chat run created",
+		"run_id", run.ID,
+		"request_id", run.RequestID,
+		"thread_id", run.ThreadID,
+		"user_id", run.UserID,
+		"agent_id", run.AgentID,
+		"model_backend", run.ModelBackend,
+	)
+
 	if err := sse.Write(w, sse.Event{Type: sse.EventRunCreated, Data: run}); err != nil {
 		return err
 	}
@@ -148,11 +158,19 @@ func (s *Service) StartChatRun(ctx context.Context, req *ChatRunRequest, w http.
 		return err
 	}
 
+	start := time.Now()
 	if err := s.agent.Run(ctx, run, w, buildRunPolicy(req.ToolPolicy)); err != nil {
 		run.Status = "failed"
 		run.UpdatedAt = time.Now().UTC()
 		_ = s.store.UpdateRun(ctx, run)
 		_ = sse.Write(w, sse.Event{Type: sse.EventRunFailed, Data: run})
+		slog.Error("chat run failed",
+			"run_id", run.ID,
+			"request_id", run.RequestID,
+			"thread_id", run.ThreadID,
+			"latency_ms", time.Since(start).Milliseconds(),
+		)
+		s.recordRunMetrics(run, time.Since(start))
 		return fmt.Errorf("agent run: %w", err)
 	}
 
@@ -161,6 +179,16 @@ func (s *Service) StartChatRun(ctx context.Context, req *ChatRunRequest, w http.
 	if err := s.store.UpdateRun(ctx, run); err != nil {
 		return fmt.Errorf("update run completed: %w", err)
 	}
+	latency := time.Since(start)
+	slog.Info("chat run completed",
+		"run_id", run.ID,
+		"request_id", run.RequestID,
+		"thread_id", run.ThreadID,
+		"latency_ms", latency.Milliseconds(),
+		"tool_calls", len(run.ToolCalls),
+		"approval_recs", len(run.ApprovalRecs),
+	)
+	s.recordRunMetrics(run, latency)
 	return sse.Write(w, sse.Event{Type: sse.EventRunCompleted, Data: run})
 }
 
@@ -219,11 +247,25 @@ func (s *Service) streamAutomationRun(ctx context.Context, run *store.Run, w htt
 		return err
 	}
 
+	slog.Info("automation run started",
+		"run_id", run.ID,
+		"workflow_id", run.WorkflowID,
+		"job_type", run.JobType,
+		"model_backend", run.ModelBackend,
+	)
+
+	start := time.Now()
 	if err := s.agent.Run(ctx, run, w, nil); err != nil {
 		run.Status = "failed"
 		run.UpdatedAt = time.Now().UTC()
 		_ = s.store.UpdateRun(ctx, run)
 		_ = sse.Write(w, sse.Event{Type: sse.EventRunFailed, Data: run})
+		slog.Error("automation run failed",
+			"run_id", run.ID,
+			"workflow_id", run.WorkflowID,
+			"latency_ms", time.Since(start).Milliseconds(),
+		)
+		s.recordRunMetrics(run, time.Since(start))
 		return fmt.Errorf("agent run: %w", err)
 	}
 
@@ -232,6 +274,14 @@ func (s *Service) streamAutomationRun(ctx context.Context, run *store.Run, w htt
 	if err := s.store.UpdateRun(ctx, run); err != nil {
 		return fmt.Errorf("update run completed: %w", err)
 	}
+	latency := time.Since(start)
+	slog.Info("automation run completed",
+		"run_id", run.ID,
+		"workflow_id", run.WorkflowID,
+		"latency_ms", latency.Milliseconds(),
+		"tool_calls", len(run.ToolCalls),
+	)
+	s.recordRunMetrics(run, latency)
 	return sse.Write(w, sse.Event{Type: sse.EventRunCompleted, Data: run})
 }
 
@@ -244,11 +294,25 @@ func (s *Service) syncAutomationRun(ctx context.Context, run *store.Run, w http.
 		return fmt.Errorf("update run in_progress: %w", err)
 	}
 
+	slog.Info("automation run started",
+		"run_id", run.ID,
+		"workflow_id", run.WorkflowID,
+		"job_type", run.JobType,
+		"model_backend", run.ModelBackend,
+	)
+
 	dw := &discardResponseWriter{}
+	start := time.Now()
 	if err := s.agent.Run(ctx, run, dw, nil); err != nil {
 		run.Status = "failed"
 		run.UpdatedAt = time.Now().UTC()
 		_ = s.store.UpdateRun(ctx, run)
+		slog.Error("automation run failed",
+			"run_id", run.ID,
+			"workflow_id", run.WorkflowID,
+			"latency_ms", time.Since(start).Milliseconds(),
+		)
+		s.recordRunMetrics(run, time.Since(start))
 		return fmt.Errorf("agent run: %w", err)
 	}
 
@@ -257,6 +321,14 @@ func (s *Service) syncAutomationRun(ctx context.Context, run *store.Run, w http.
 	if err := s.store.UpdateRun(ctx, run); err != nil {
 		return fmt.Errorf("update run completed: %w", err)
 	}
+	latency := time.Since(start)
+	slog.Info("automation run completed",
+		"run_id", run.ID,
+		"workflow_id", run.WorkflowID,
+		"latency_ms", latency.Milliseconds(),
+		"tool_calls", len(run.ToolCalls),
+	)
+	s.recordRunMetrics(run, latency)
 
 	return json.NewEncoder(w).Encode(AutomationRunResult{
 		RunID:        run.ID,

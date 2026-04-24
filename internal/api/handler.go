@@ -10,6 +10,7 @@ import (
 	"github.com/goblinsan/agent-service/internal/metrics"
 	"github.com/goblinsan/agent-service/internal/service"
 	"github.com/goblinsan/agent-service/internal/sse"
+	"github.com/goblinsan/agent-service/internal/store"
 )
 
 // RouterOptions configures optional features of the HTTP router.
@@ -51,6 +52,9 @@ func NewRouterWithOptions(svc *service.Service, opts RouterOptions) http.Handler
 	r.Post("/sessions", createSessionHandler(svc))
 	r.Post("/sessions/{sessionID}/runs", createRunHandler(svc, opts.Metrics))
 	r.Get("/sessions/{sessionID}/runs/{runID}/events", runEventsHandler(svc))
+
+	r.Get("/runs/{runID}", getRunHandler(svc))
+	r.Get("/runs/{runID}/steps", listRunStepsHandler(svc))
 
 	r.Get("/approvals/{id}", getApprovalHandler(svc))
 	r.Post("/approvals/{id}/approve", approveHandler(svc))
@@ -142,6 +146,45 @@ func runEventsHandler(svc *service.Service) http.HandlerFunc {
 		// Future: stream stored events for a run
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
+		}
+	}
+}
+
+// getRunHandler handles GET /runs/{runID}.
+// It returns the full run record including tool calls and approval records so
+// that operators can inspect the state of any completed or failed run.
+func getRunHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		runID := chi.URLParam(r, "runID")
+		run, err := svc.GetRun(r.Context(), runID)
+		if err != nil {
+			http.Error(w, `{"error":"run not found"}`, http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(run); err != nil {
+			slog.Error("failed to encode run response", "error", err)
+		}
+	}
+}
+
+// listRunStepsHandler handles GET /runs/{runID}/steps.
+// It returns the ordered list of agent steps for the given run, enabling
+// replay and post-hoc inspection without relying on streaming-time logs.
+func listRunStepsHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		runID := chi.URLParam(r, "runID")
+		steps, err := svc.ListRunSteps(r.Context(), runID)
+		if err != nil {
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		if steps == nil {
+			steps = []*store.RunStep{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(steps); err != nil {
+			slog.Error("failed to encode steps response", "error", err)
 		}
 	}
 }

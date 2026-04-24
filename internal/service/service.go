@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/goblinsan/agent-service/internal/agent"
+	"github.com/goblinsan/agent-service/internal/metrics"
 	"github.com/goblinsan/agent-service/internal/model"
 	"github.com/goblinsan/agent-service/internal/policy"
 	"github.com/goblinsan/agent-service/internal/runner"
@@ -24,12 +25,16 @@ type ServiceOptions struct {
 	// Policy is the base policy applied to every tool call. When nil all tool
 	// calls that reach a runner are allowed.
 	Policy policy.Policy
+	// Metrics, when non-nil, receives run-level counters (tool calls, approvals,
+	// backend selections, and latency) as each run completes.
+	Metrics *metrics.Metrics
 }
 
 type Service struct {
 	store     store.Store
 	agent     *agent.Agent
 	approvals *policy.Approvals
+	metrics   *metrics.Metrics
 }
 
 // New returns a Service with default options (no runner, no base policy).
@@ -48,6 +53,7 @@ func NewWithOptions(s store.Store, p model.Provider, maxSteps int, opts ServiceO
 			Approvals: approvals,
 		}),
 		approvals: approvals,
+		metrics:   opts.Metrics,
 	}
 }
 
@@ -91,11 +97,14 @@ func (s *Service) StartRun(ctx context.Context, sessionID, prompt string, w http
 		return err
 	}
 
+	start := time.Now()
 	if err := s.agent.Run(ctx, run, w, nil); err != nil {
 		run.Status = "failed"
 		run.UpdatedAt = time.Now().UTC()
 		_ = s.store.UpdateRun(ctx, run)
 		_ = sse.Write(w, sse.Event{Type: sse.EventRunFailed, Data: run})
+		latency := time.Since(start)
+		s.recordRunMetrics(run, latency)
 		return fmt.Errorf("agent run: %w", err)
 	}
 
@@ -105,6 +114,8 @@ func (s *Service) StartRun(ctx context.Context, sessionID, prompt string, w http
 	if err := s.store.UpdateRun(ctx, run); err != nil {
 		return fmt.Errorf("update run completed: %w", err)
 	}
+	latency := time.Since(start)
+	s.recordRunMetrics(run, latency)
 	return sse.Write(w, sse.Event{Type: sse.EventRunCompleted, Data: run})
 }
 
@@ -129,6 +140,33 @@ func (s *Service) ApproveApproval(id string) error {
 // DenyApproval marks the pending approval as denied with the given reason.
 func (s *Service) DenyApproval(id, reason string) error {
 	return s.approvals.Deny(id, reason)
+}
+
+// GetRun returns the stored run record for the given run ID. It is intended for
+// operators and inspection tooling that need to review a completed run.
+func (s *Service) GetRun(ctx context.Context, id string) (*store.Run, error) {
+	return s.store.GetRun(ctx, id)
+}
+
+// ListRunSteps returns the ordered list of agent steps persisted for the given
+// run ID. This enables replay and post-hoc inspection of individual reasoning
+// steps without relying on streaming-time logs.
+func (s *Service) ListRunSteps(ctx context.Context, runID string) ([]*store.RunStep, error) {
+	return s.store.ListSteps(ctx, runID)
+}
+
+// recordRunMetrics updates in-process counters after a run finishes.
+// It is a no-op when the service was created without a Metrics instance.
+func (s *Service) recordRunMetrics(run *store.Run, latency time.Duration) {
+	if s.metrics == nil {
+		return
+	}
+	s.metrics.RecordRunCompleted(latency.Milliseconds())
+	s.metrics.ToolCallsTotal.Add(int64(len(run.ToolCalls)))
+	s.metrics.ApprovalRequestsTotal.Add(int64(len(run.ApprovalRecs)))
+	if run.ModelBackend != "" {
+		s.metrics.BackendSelectionsTotal.Add(1)
+	}
 }
 
 // buildRunPolicy converts a ToolPolicySpec from the caller into an

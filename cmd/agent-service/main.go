@@ -62,16 +62,20 @@ func main() {
 		provider = &noopProvider{}
 	}
 
-	svc := service.New(pg, provider, cfg.AgentMaxSteps)
+	m := &metrics.Metrics{}
 
+	var svc *service.Service
 	if cfg.MCPEndpoint != "" {
 		svc = service.NewWithOptions(pg, provider, cfg.AgentMaxSteps, service.ServiceOptions{
-			Runner: agentrunner.NewMCPRunner(cfg.MCPEndpoint, nil),
+			Runner:  agentrunner.NewMCPRunner(cfg.MCPEndpoint, nil),
+			Metrics: m,
 		})
 		slog.Info("MCP runner configured", "endpoint", cfg.MCPEndpoint)
+	} else {
+		svc = service.NewWithOptions(pg, provider, cfg.AgentMaxSteps, service.ServiceOptions{
+			Metrics: m,
+		})
 	}
-
-	m := &metrics.Metrics{}
 
 	router := api.NewRouterWithOptions(svc, api.RouterOptions{
 		APIKey:  cfg.APIKey,

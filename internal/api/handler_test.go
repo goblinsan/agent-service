@@ -20,6 +20,7 @@ import (
 type mockStore struct {
 	sessions map[string]*store.Session
 	runs     map[string]*store.Run
+	steps    []*store.RunStep
 }
 
 func newMockStore() *mockStore {
@@ -60,9 +61,18 @@ func (m *mockStore) UpdateRun(_ context.Context, r *store.Run) error {
 	return nil
 }
 
-func (m *mockStore) CreateStep(_ context.Context, _ *store.RunStep) error { return nil }
-func (m *mockStore) ListSteps(_ context.Context, _ string) ([]*store.RunStep, error) {
-	return nil, nil
+func (m *mockStore) CreateStep(_ context.Context, step *store.RunStep) error {
+	m.steps = append(m.steps, step)
+	return nil
+}
+func (m *mockStore) ListSteps(_ context.Context, runID string) ([]*store.RunStep, error) {
+	var result []*store.RunStep
+	for _, s := range m.steps {
+		if s.RunID == runID {
+			result = append(result, s)
+		}
+	}
+	return result, nil
 }
 
 type mockProvider struct{}
