@@ -1,0 +1,286 @@
+package service_test
+
+import (
+	"context"
+	"encoding/json"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/goblinsan/agent-service/internal/model"
+	"github.com/goblinsan/agent-service/internal/service"
+	"github.com/goblinsan/agent-service/internal/store"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// ---------------------------------------------------------------------------
+// StartChatRun
+// ---------------------------------------------------------------------------
+
+func TestStartChatRun_StreamsExpectedEvents(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+
+	req := &service.ChatRunRequest{
+		RequestID: "req-1",
+		ThreadID:  "thread-1",
+		UserID:    "user-1",
+		AgentID:   "agent-1",
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "hello"},
+		},
+	}
+
+	rr := httptest.NewRecorder()
+	err := svc.StartChatRun(context.Background(), req, rr)
+	require.NoError(t, err)
+
+	body := rr.Body.String()
+	assert.Contains(t, body, "run.created")
+	assert.Contains(t, body, "run.in_progress")
+	assert.Contains(t, body, "run.step")
+	assert.Contains(t, body, "run.completed")
+}
+
+func TestStartChatRun_EmitsModelSelectedWhenPreferenceSet(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+
+	req := &service.ChatRunRequest{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+		ModelPreferences: &service.ModelPreferences{
+			Preferred: "gpt-4",
+		},
+	}
+
+	rr := httptest.NewRecorder()
+	require.NoError(t, svc.StartChatRun(context.Background(), req, rr))
+
+	body := rr.Body.String()
+	assert.Contains(t, body, "run.model_selected")
+	assert.Contains(t, body, "gpt-4")
+}
+
+func TestStartChatRun_NoModelSelectedEventWhenNoPreference(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+
+	req := &service.ChatRunRequest{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "test"},
+		},
+	}
+
+	rr := httptest.NewRecorder()
+	require.NoError(t, svc.StartChatRun(context.Background(), req, rr))
+
+	assert.NotContains(t, rr.Body.String(), "run.model_selected")
+}
+
+func TestStartChatRun_PersistsRunWithChatContext(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+
+	req := &service.ChatRunRequest{
+		RequestID: "req-99",
+		ThreadID:  "thread-42",
+		UserID:    "user-7",
+		AgentID:   "agent-abc",
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "hello world"},
+		},
+	}
+
+	rr := httptest.NewRecorder()
+	require.NoError(t, svc.StartChatRun(context.Background(), req, rr))
+
+	var run *store.Run
+	for _, r := range ms.runs {
+		run = r
+		break
+	}
+	require.NotNil(t, run)
+	assert.Equal(t, "chat", run.Source)
+	assert.Equal(t, "req-99", run.RequestID)
+	assert.Equal(t, "thread-42", run.ThreadID)
+	assert.Equal(t, "thread-42", run.SessionID) // ThreadID maps to SessionID
+	assert.Equal(t, "user-7", run.UserID)
+	assert.Equal(t, "agent-abc", run.AgentID)
+	assert.Equal(t, "completed", run.Status)
+}
+
+func TestStartChatRun_UsesLastUserMessageAsPrompt(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+
+	req := &service.ChatRunRequest{
+		ThreadID: "t1",
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "first message"},
+			{Role: model.RoleAssistant, Content: "assistant reply"},
+			{Role: model.RoleUser, Content: "follow-up question"},
+		},
+	}
+
+	rr := httptest.NewRecorder()
+	require.NoError(t, svc.StartChatRun(context.Background(), req, rr))
+
+	var run *store.Run
+	for _, r := range ms.runs {
+		run = r
+		break
+	}
+	require.NotNil(t, run)
+	assert.Equal(t, "follow-up question", run.Prompt)
+}
+
+// ---------------------------------------------------------------------------
+// StartAutomationRun – stream mode
+// ---------------------------------------------------------------------------
+
+func TestStartAutomationRun_StreamMode_EmitsEvents(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+
+	req := &service.AutomationRunRequest{
+		Source:       "scheduler",
+		JobType:      "report",
+		WorkflowID:   "wf-1",
+		Prompt:       "generate the weekly report",
+		ResponseMode: "stream",
+	}
+
+	rr := httptest.NewRecorder()
+	err := svc.StartAutomationRun(context.Background(), req, rr)
+	require.NoError(t, err)
+
+	body := rr.Body.String()
+	assert.Contains(t, body, "run.created")
+	assert.Contains(t, body, "run.in_progress")
+	assert.Contains(t, body, "run.completed")
+}
+
+func TestStartAutomationRun_StreamMode_EmitsModelSelected(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+
+	req := &service.AutomationRunRequest{
+		Source:       "kulrs",
+		JobType:      "summarise",
+		Prompt:       "summarise this",
+		ResponseMode: "stream",
+		ModelPreferences: &service.ModelPreferences{
+			Preferred: "llama3",
+		},
+	}
+
+	rr := httptest.NewRecorder()
+	require.NoError(t, svc.StartAutomationRun(context.Background(), req, rr))
+
+	body := rr.Body.String()
+	assert.Contains(t, body, "run.model_selected")
+	assert.Contains(t, body, "llama3")
+}
+
+func TestStartAutomationRun_StreamMode_PersistsContext(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+
+	req := &service.AutomationRunRequest{
+		Source:       "worker",
+		JobType:      "ingest",
+		WorkflowID:   "wf-abc",
+		Prompt:       "ingest the data",
+		ResponseMode: "stream",
+	}
+
+	rr := httptest.NewRecorder()
+	require.NoError(t, svc.StartAutomationRun(context.Background(), req, rr))
+
+	var run *store.Run
+	for _, r := range ms.runs {
+		run = r
+		break
+	}
+	require.NotNil(t, run)
+	assert.Equal(t, "automation", run.Source)
+	assert.Equal(t, "ingest", run.JobType)
+	assert.Equal(t, "wf-abc", run.WorkflowID)
+	assert.Equal(t, "completed", run.Status)
+}
+
+// ---------------------------------------------------------------------------
+// StartAutomationRun – sync mode
+// ---------------------------------------------------------------------------
+
+func TestStartAutomationRun_SyncMode_ReturnsJSON(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+
+	req := &service.AutomationRunRequest{
+		Source:       "scheduler",
+		JobType:      "report",
+		Prompt:       "run the report",
+		ResponseMode: "sync",
+	}
+
+	rr := httptest.NewRecorder()
+	err := svc.StartAutomationRun(context.Background(), req, rr)
+	require.NoError(t, err)
+
+	// Sync mode must not emit SSE events.
+	body := rr.Body.String()
+	assert.False(t, strings.Contains(body, "run.created"), "sync mode should not emit SSE events")
+
+	// Response must be a valid AutomationRunResult JSON.
+	var result service.AutomationRunResult
+	require.NoError(t, json.NewDecoder(strings.NewReader(body)).Decode(&result))
+	assert.Equal(t, "completed", result.Status)
+	assert.NotEmpty(t, result.RunID)
+}
+
+func TestStartAutomationRun_DefaultSync_ReturnsJSON(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+
+	// Omitting ResponseMode defaults to sync.
+	req := &service.AutomationRunRequest{
+		Source:  "worker",
+		JobType: "process",
+		Prompt:  "do the work",
+	}
+
+	rr := httptest.NewRecorder()
+	err := svc.StartAutomationRun(context.Background(), req, rr)
+	require.NoError(t, err)
+
+	var result service.AutomationRunResult
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&result))
+	assert.Equal(t, "completed", result.Status)
+	assert.NotEmpty(t, result.RunID)
+}
+
+func TestStartAutomationRun_SyncMode_ModelBackendInResult(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+
+	req := &service.AutomationRunRequest{
+		Source:       "scheduler",
+		JobType:      "report",
+		Prompt:       "run report",
+		ResponseMode: "sync",
+		ModelPreferences: &service.ModelPreferences{
+			Preferred: "llama3",
+		},
+	}
+
+	rr := httptest.NewRecorder()
+	require.NoError(t, svc.StartAutomationRun(context.Background(), req, rr))
+
+	var result service.AutomationRunResult
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&result))
+	assert.Equal(t, "llama3", result.ModelBackend)
+}

@@ -56,6 +56,11 @@ func NewRouterWithOptions(svc *service.Service, opts RouterOptions) http.Handler
 	r.Post("/approvals/{id}/approve", approveHandler(svc))
 	r.Post("/approvals/{id}/deny", denyHandler(svc))
 
+	// Internal orchestration endpoints – designed for gateway-chat-platform and
+	// automation callers, not for direct browser use.
+	r.Post("/internal/chat", internalChatHandler(svc, opts.Metrics))
+	r.Post("/internal/automation", internalAutomationHandler(svc, opts.Metrics))
+
 	return r
 }
 
@@ -181,3 +186,88 @@ func denyHandler(svc *service.Service) http.HandlerFunc {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
+
+// internalChatHandler handles POST /internal/chat.
+// It accepts a ChatRunRequest from the gateway-chat-platform and streams
+// structured SSE run events back to the caller.
+func internalChatHandler(svc *service.Service, m *metrics.Metrics) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req service.ChatRunRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		if len(req.Messages) == 0 {
+			http.Error(w, `{"error":"messages is required"}`, http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+
+		if m != nil {
+			m.TotalRuns.Add(1)
+		}
+		if err := svc.StartChatRun(r.Context(), &req, w); err != nil {
+			if m != nil {
+				m.FailedRuns.Add(1)
+			}
+			slog.Error("chat run failed", "error", err)
+			_ = sse.Write(w, sse.Event{Type: sse.EventRunFailed, Data: map[string]string{"error": "run failed"}})
+		}
+	}
+}
+
+// internalAutomationHandler handles POST /internal/automation.
+// It accepts an AutomationRunRequest and either streams SSE events
+// (response_mode "stream") or returns a single JSON result (response_mode "sync"
+// or when response_mode is omitted).
+func internalAutomationHandler(svc *service.Service, m *metrics.Metrics) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req service.AutomationRunRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		if req.Source == "" {
+			http.Error(w, `{"error":"source is required"}`, http.StatusBadRequest)
+			return
+		}
+		if req.JobType == "" {
+			http.Error(w, `{"error":"job_type is required"}`, http.StatusBadRequest)
+			return
+		}
+		if req.Prompt == "" {
+			http.Error(w, `{"error":"prompt is required"}`, http.StatusBadRequest)
+			return
+		}
+
+		if m != nil {
+			m.TotalRuns.Add(1)
+		}
+
+		if req.ResponseMode == "stream" {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+		}
+
+		if err := svc.StartAutomationRun(r.Context(), &req, w); err != nil {
+			if m != nil {
+				m.FailedRuns.Add(1)
+			}
+			slog.Error("automation run failed", "error", err)
+			if req.ResponseMode == "stream" {
+				_ = sse.Write(w, sse.Event{Type: sse.EventRunFailed, Data: map[string]string{"error": "run failed"}})
+			} else {
+				http.Error(w, `{"error":"run failed"}`, http.StatusInternalServerError)
+			}
+		}
+	}
+}
+

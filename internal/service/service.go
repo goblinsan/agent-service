@@ -46,6 +46,7 @@ func (s *Service) StartRun(ctx context.Context, sessionID, prompt string, w http
 	run := &store.Run{
 		ID:        newID(),
 		SessionID: sessionID,
+		Source:    string(store.RunSourceChat),
 		Prompt:    prompt,
 		Status:    "created",
 		CreatedAt: time.Now().UTC(),
@@ -55,7 +56,7 @@ func (s *Service) StartRun(ctx context.Context, sessionID, prompt string, w http
 		return fmt.Errorf("create run: %w", err)
 	}
 
-	if err := sse.Write(w, sse.Event{Type: "run.created", Data: run}); err != nil {
+	if err := sse.Write(w, sse.Event{Type: sse.EventRunCreated, Data: run}); err != nil {
 		return err
 	}
 
@@ -64,7 +65,7 @@ func (s *Service) StartRun(ctx context.Context, sessionID, prompt string, w http
 	if err := s.store.UpdateRun(ctx, run); err != nil {
 		return fmt.Errorf("update run in_progress: %w", err)
 	}
-	if err := sse.Write(w, sse.Event{Type: "run.in_progress", Data: run}); err != nil {
+	if err := sse.Write(w, sse.Event{Type: sse.EventRunInProgress, Data: run}); err != nil {
 		return err
 	}
 
@@ -72,7 +73,7 @@ func (s *Service) StartRun(ctx context.Context, sessionID, prompt string, w http
 		run.Status = "failed"
 		run.UpdatedAt = time.Now().UTC()
 		_ = s.store.UpdateRun(ctx, run)
-		_ = sse.Write(w, sse.Event{Type: "run.failed", Data: run})
+		_ = sse.Write(w, sse.Event{Type: sse.EventRunFailed, Data: run})
 		return fmt.Errorf("agent run: %w", err)
 	}
 
@@ -82,7 +83,7 @@ func (s *Service) StartRun(ctx context.Context, sessionID, prompt string, w http
 	if err := s.store.UpdateRun(ctx, run); err != nil {
 		return fmt.Errorf("update run completed: %w", err)
 	}
-	return sse.Write(w, sse.Event{Type: "run.completed", Data: run})
+	return sse.Write(w, sse.Event{Type: sse.EventRunCompleted, Data: run})
 }
 
 // RequestApproval creates a new pending approval for the given tool call and
