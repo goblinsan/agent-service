@@ -11,9 +11,20 @@ import (
 	"github.com/goblinsan/agent-service/internal/agent"
 	"github.com/goblinsan/agent-service/internal/model"
 	"github.com/goblinsan/agent-service/internal/policy"
+	"github.com/goblinsan/agent-service/internal/runner"
 	"github.com/goblinsan/agent-service/internal/sse"
 	"github.com/goblinsan/agent-service/internal/store"
 )
+
+// ServiceOptions configures optional capabilities of the Service.
+type ServiceOptions struct {
+	// Runner is used by the agent to execute tool calls. When nil, any tool call
+	// requested by the model will result in an error recorded in the run.
+	Runner runner.Runner
+	// Policy is the base policy applied to every tool call. When nil all tool
+	// calls that reach a runner are allowed.
+	Policy policy.Policy
+}
 
 type Service struct {
 	store     store.Store
@@ -21,11 +32,22 @@ type Service struct {
 	approvals *policy.Approvals
 }
 
+// New returns a Service with default options (no runner, no base policy).
 func New(s store.Store, p model.Provider, maxSteps int) *Service {
+	return NewWithOptions(s, p, maxSteps, ServiceOptions{})
+}
+
+// NewWithOptions returns a Service configured with the supplied options.
+func NewWithOptions(s store.Store, p model.Provider, maxSteps int, opts ServiceOptions) *Service {
+	approvals := policy.NewApprovals()
 	return &Service{
-		store:     s,
-		agent:     agent.New(p, s, maxSteps),
-		approvals: policy.NewApprovals(),
+		store: s,
+		agent: agent.NewWithOptions(p, s, maxSteps, agent.Options{
+			Runner:    opts.Runner,
+			Policy:    opts.Policy,
+			Approvals: approvals,
+		}),
+		approvals: approvals,
 	}
 }
 
@@ -69,7 +91,7 @@ func (s *Service) StartRun(ctx context.Context, sessionID, prompt string, w http
 		return err
 	}
 
-	if err := s.agent.Run(ctx, run, w); err != nil {
+	if err := s.agent.Run(ctx, run, w, nil); err != nil {
 		run.Status = "failed"
 		run.UpdatedAt = time.Now().UTC()
 		_ = s.store.UpdateRun(ctx, run)
@@ -107,6 +129,26 @@ func (s *Service) ApproveApproval(id string) error {
 // DenyApproval marks the pending approval as denied with the given reason.
 func (s *Service) DenyApproval(id, reason string) error {
 	return s.approvals.Deny(id, reason)
+}
+
+// buildRunPolicy converts a ToolPolicySpec from the caller into an
+// AllowlistPolicy. Returns nil when the spec is nil or has no restrictions.
+func buildRunPolicy(spec *ToolPolicySpec) policy.Policy {
+	if spec == nil {
+		return nil
+	}
+	if len(spec.AllowedTools) == 0 && len(spec.RequireApproval) == 0 && len(spec.DeniedTools) == 0 {
+		return nil
+	}
+	approvalMap := make(map[string]bool, len(spec.RequireApproval))
+	for _, t := range spec.RequireApproval {
+		approvalMap[t] = true
+	}
+	return &policy.AllowlistPolicy{
+		AllowedToolNames: spec.AllowedTools,
+		DeniedToolNames:  spec.DeniedTools,
+		ApprovalTools:    approvalMap,
+	}
 }
 
 func newID() string {

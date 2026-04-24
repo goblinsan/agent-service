@@ -128,6 +128,103 @@ func TestAllowlistPolicy_UnknownTool_Allow(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// AllowlistPolicy – AllowedToolNames
+// ---------------------------------------------------------------------------
+
+func TestAllowlistPolicy_AllowedToolNames_PermitsListed(t *testing.T) {
+	p := &policy.AllowlistPolicy{AllowedToolNames: []string{"echo", "search"}}
+	d, _ := p.Evaluate("echo", map[string]any{})
+	assert.Equal(t, policy.Allow, d)
+}
+
+func TestAllowlistPolicy_AllowedToolNames_DeniesUnlisted(t *testing.T) {
+	p := &policy.AllowlistPolicy{AllowedToolNames: []string{"echo"}}
+	d, reason := p.Evaluate("file", map[string]any{})
+	assert.Equal(t, policy.Deny, d)
+	assert.NotEmpty(t, reason)
+}
+
+func TestAllowlistPolicy_AllowedToolNames_Empty_AllowsAll(t *testing.T) {
+	p := &policy.AllowlistPolicy{}
+	d, _ := p.Evaluate("anything", map[string]any{})
+	assert.Equal(t, policy.Allow, d)
+}
+
+// ---------------------------------------------------------------------------
+// AllowlistPolicy – DeniedToolNames
+// ---------------------------------------------------------------------------
+
+func TestAllowlistPolicy_DeniedToolNames_BlocksDenied(t *testing.T) {
+	p := &policy.AllowlistPolicy{DeniedToolNames: []string{"rm", "shutdown"}}
+	d, reason := p.Evaluate("rm", map[string]any{})
+	assert.Equal(t, policy.Deny, d)
+	assert.NotEmpty(t, reason)
+}
+
+func TestAllowlistPolicy_DeniedToolNames_AllowsOthers(t *testing.T) {
+	p := &policy.AllowlistPolicy{DeniedToolNames: []string{"rm"}}
+	d, _ := p.Evaluate("echo", map[string]any{})
+	assert.Equal(t, policy.Allow, d)
+}
+
+func TestAllowlistPolicy_DeniedToolNames_TakesPrecedenceOverAllowed(t *testing.T) {
+	// A tool is in both the allow-list and the deny-list; deny wins.
+	p := &policy.AllowlistPolicy{
+		AllowedToolNames: []string{"echo"},
+		DeniedToolNames:  []string{"echo"},
+	}
+	d, _ := p.Evaluate("echo", map[string]any{})
+	assert.Equal(t, policy.Deny, d)
+}
+
+// ---------------------------------------------------------------------------
+// CompositePolicy
+// ---------------------------------------------------------------------------
+
+func TestCompositePolicy_AllAllow(t *testing.T) {
+	p := policy.NewCompositePolicy(
+		&policy.AllowlistPolicy{},
+		&policy.AllowlistPolicy{},
+	)
+	d, _ := p.Evaluate("echo", map[string]any{})
+	assert.Equal(t, policy.Allow, d)
+}
+
+func TestCompositePolicy_AnyDenyWins(t *testing.T) {
+	p := policy.NewCompositePolicy(
+		&policy.AllowlistPolicy{},
+		&policy.AllowlistPolicy{DeniedToolNames: []string{"echo"}},
+	)
+	d, _ := p.Evaluate("echo", map[string]any{})
+	assert.Equal(t, policy.Deny, d)
+}
+
+func TestCompositePolicy_RequireApprovalElevatesDecision(t *testing.T) {
+	p := policy.NewCompositePolicy(
+		&policy.AllowlistPolicy{},
+		&policy.AllowlistPolicy{ApprovalTools: map[string]bool{"echo": true}},
+	)
+	d, _ := p.Evaluate("echo", map[string]any{})
+	assert.Equal(t, policy.RequireApproval, d)
+}
+
+func TestCompositePolicy_DenyOverridesRequireApproval(t *testing.T) {
+	// Even when one policy says RequireApproval, a Deny from another wins.
+	p := policy.NewCompositePolicy(
+		&policy.AllowlistPolicy{ApprovalTools: map[string]bool{"echo": true}},
+		&policy.AllowlistPolicy{DeniedToolNames: []string{"echo"}},
+	)
+	d, _ := p.Evaluate("echo", map[string]any{})
+	assert.Equal(t, policy.Deny, d)
+}
+
+func TestCompositePolicy_NilPoliciesIgnored(t *testing.T) {
+	p := policy.NewCompositePolicy(nil, nil)
+	d, _ := p.Evaluate("echo", map[string]any{})
+	assert.Equal(t, policy.Allow, d)
+}
+
+// ---------------------------------------------------------------------------
 // Decision.String
 // ---------------------------------------------------------------------------
 

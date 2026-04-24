@@ -37,10 +37,18 @@ type Policy interface {
 	Evaluate(toolName string, params map[string]any) (Decision, string)
 }
 
-// AllowlistPolicy is a Policy that enforces allowlists for filesystem paths,
-// HTTP domains, and git operations, and optionally routes specific tools through
-// a human-approval gate.
+// AllowlistPolicy is a Policy that enforces allowlists for tool names,
+// filesystem paths, HTTP domains, and git operations, and optionally routes
+// specific tools through a human-approval gate.
 type AllowlistPolicy struct {
+	// AllowedToolNames, when non-empty, limits which tool names the agent may
+	// call. Any tool not in this list is denied.
+	AllowedToolNames []string
+
+	// DeniedToolNames lists tools that are completely blocked regardless of
+	// other rules.
+	DeniedToolNames []string
+
 	// AllowedPaths is the list of path prefixes the file tool may access.
 	// When empty, no additional path restriction is applied.
 	AllowedPaths []string
@@ -62,6 +70,28 @@ type AllowlistPolicy struct {
 // Evaluate checks the tool call against the configured allowlists and approval
 // requirements.
 func (p *AllowlistPolicy) Evaluate(toolName string, params map[string]any) (Decision, string) {
+	// Explicit deny list takes highest priority.
+	for _, d := range p.DeniedToolNames {
+		if d == toolName {
+			return Deny, "tool is denied by policy"
+		}
+	}
+
+	// If an allowed-tool-names allowlist is configured, only listed tools pass.
+	if len(p.AllowedToolNames) > 0 {
+		found := false
+		for _, a := range p.AllowedToolNames {
+			if a == toolName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return Deny, "tool is not in the allowed tools list"
+		}
+	}
+
+	// Approval gate check.
 	if p.ApprovalTools[toolName] {
 		return RequireApproval, "tool requires human approval"
 	}
@@ -120,4 +150,41 @@ func (p *AllowlistPolicy) evaluateGit(params map[string]any) (Decision, string) 
 		}
 	}
 	return Deny, "git operation is not in the allowed operations list"
+}
+
+// CompositePolicy chains multiple policies and returns the most restrictive
+// outcome: Deny takes precedence over RequireApproval, which takes precedence
+// over Allow.
+type CompositePolicy struct {
+	policies []Policy
+}
+
+// NewCompositePolicy returns a CompositePolicy that evaluates all supplied
+// policies and returns the strictest decision.
+func NewCompositePolicy(policies ...Policy) *CompositePolicy {
+	return &CompositePolicy{policies: policies}
+}
+
+// Evaluate runs every contained policy. The first Deny short-circuits. A
+// RequireApproval from any policy upgrades the result but does not stop
+// evaluation (a later Deny can still override it).
+func (c *CompositePolicy) Evaluate(toolName string, params map[string]any) (Decision, string) {
+	result := Allow
+	var reason string
+	for _, p := range c.policies {
+		if p == nil {
+			continue
+		}
+		d, r := p.Evaluate(toolName, params)
+		switch d {
+		case Deny:
+			return Deny, r
+		case RequireApproval:
+			if result == Allow {
+				result = RequireApproval
+				reason = r
+			}
+		}
+	}
+	return result, reason
 }
