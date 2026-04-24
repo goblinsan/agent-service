@@ -103,7 +103,8 @@ func (s *Service) StartRun(ctx context.Context, sessionID, prompt string, w http
 		run.UpdatedAt = time.Now().UTC()
 		_ = s.store.UpdateRun(ctx, run)
 		_ = sse.Write(w, sse.Event{Type: sse.EventRunFailed, Data: run})
-		s.recordRunMetrics(run, time.Since(start))
+		latency := time.Since(start)
+		s.recordRunMetrics(run, latency)
 		return fmt.Errorf("agent run: %w", err)
 	}
 
@@ -113,7 +114,8 @@ func (s *Service) StartRun(ctx context.Context, sessionID, prompt string, w http
 	if err := s.store.UpdateRun(ctx, run); err != nil {
 		return fmt.Errorf("update run completed: %w", err)
 	}
-	s.recordRunMetrics(run, time.Since(start))
+	latency := time.Since(start)
+	s.recordRunMetrics(run, latency)
 	return sse.Write(w, sse.Event{Type: sse.EventRunCompleted, Data: run})
 }
 

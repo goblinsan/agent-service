@@ -260,10 +260,6 @@ func TestE2E_MultiNode_BackendSelection(t *testing.T) {
 
 func TestE2E_MultiNode_FallbackWhenPrimaryDown(t *testing.T) {
 	// n1 errors; n2 succeeds.  The pool should fall back to n2.
-	type failProvider struct{ model.Provider }
-	n1 := &sequenceProvider{}
-	n1.responses = []model.Response{{Content: "", FinishReason: ""}} // will be overridden by error
-
 	n2 := &sequenceProvider{
 		responses: []model.Response{{Content: "from-n2", FinishReason: "stop"}},
 	}

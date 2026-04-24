@@ -64,8 +64,7 @@ func main() {
 
 	m := &metrics.Metrics{}
 
-	svc := service.New(pg, provider, cfg.AgentMaxSteps)
-
+	var svc *service.Service
 	if cfg.MCPEndpoint != "" {
 		svc = service.NewWithOptions(pg, provider, cfg.AgentMaxSteps, service.ServiceOptions{
 			Runner:  agentrunner.NewMCPRunner(cfg.MCPEndpoint, nil),
