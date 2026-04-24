@@ -50,7 +50,7 @@ func (a *Agent) Run(ctx context.Context, run *store.Run, w http.ResponseWriter) 
 			return fmt.Errorf("persist step %d: %w", i, err)
 		}
 
-		if err := sse.Write(w, sse.Event{Type: "run.step", Data: step}); err != nil {
+		if err := sse.Write(w, sse.Event{Type: sse.EventRunStep, Data: step}); err != nil {
 			return err
 		}
 
