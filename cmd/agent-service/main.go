@@ -18,6 +18,7 @@ import (
 	"github.com/goblinsan/agent-service/internal/metrics"
 	"github.com/goblinsan/agent-service/internal/model"
 	"github.com/goblinsan/agent-service/internal/model/llama"
+	agentrunner "github.com/goblinsan/agent-service/internal/runner"
 	"github.com/goblinsan/agent-service/internal/service"
 	"github.com/goblinsan/agent-service/internal/store"
 )
@@ -50,6 +51,13 @@ func main() {
 
 	svc := service.New(pg, provider, cfg.AgentMaxSteps)
 
+	if cfg.MCPEndpoint != "" {
+		svc = service.NewWithOptions(pg, provider, cfg.AgentMaxSteps, service.ServiceOptions{
+			Runner: agentrunner.NewMCPRunner(cfg.MCPEndpoint, nil),
+		})
+		slog.Info("MCP runner configured", "endpoint", cfg.MCPEndpoint)
+	}
+
 	m := &metrics.Metrics{}
 
 	router := api.NewRouterWithOptions(svc, api.RouterOptions{
@@ -66,9 +74,6 @@ func main() {
 		slog.Info("starting server", "port", cfg.Port)
 		if cfg.APIKey != "" {
 			slog.Info("API key authentication enabled")
-		}
-		if cfg.MCPEndpoint != "" {
-			slog.Info("MCP runner configured", "endpoint", cfg.MCPEndpoint)
 		}
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("server error", "error", err)

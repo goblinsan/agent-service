@@ -82,11 +82,11 @@ type AutomationRunRequest struct {
 
 // AutomationRunResult is the response body for sync-mode automation runs.
 type AutomationRunResult struct {
-	RunID        string               `json:"run_id"`
-	Status       string               `json:"status"`
-	Output       string               `json:"output,omitempty"`
-	ModelBackend string               `json:"model_backend,omitempty"`
-	ToolCalls    []store.RunToolCall  `json:"tool_calls,omitempty"`
+	RunID        string              `json:"run_id"`
+	Status       string              `json:"status"`
+	Output       string              `json:"output,omitempty"`
+	ModelBackend string              `json:"model_backend,omitempty"`
+	ToolCalls    []store.RunToolCall `json:"tool_calls,omitempty"`
 }
 
 // StartChatRun creates a run from a gateway-chat-platform request and streams
@@ -147,7 +147,7 @@ func (s *Service) StartChatRun(ctx context.Context, req *ChatRunRequest, w http.
 		return err
 	}
 
-	if err := s.agent.Run(ctx, run, w); err != nil {
+	if err := s.agent.Run(ctx, run, w, buildRunPolicy(req.ToolPolicy)); err != nil {
 		run.Status = "failed"
 		run.UpdatedAt = time.Now().UTC()
 		_ = s.store.UpdateRun(ctx, run)
@@ -218,7 +218,7 @@ func (s *Service) streamAutomationRun(ctx context.Context, run *store.Run, w htt
 		return err
 	}
 
-	if err := s.agent.Run(ctx, run, w); err != nil {
+	if err := s.agent.Run(ctx, run, w, nil); err != nil {
 		run.Status = "failed"
 		run.UpdatedAt = time.Now().UTC()
 		_ = s.store.UpdateRun(ctx, run)
@@ -244,7 +244,7 @@ func (s *Service) syncAutomationRun(ctx context.Context, run *store.Run, w http.
 	}
 
 	dw := &discardResponseWriter{}
-	if err := s.agent.Run(ctx, run, dw); err != nil {
+	if err := s.agent.Run(ctx, run, dw, nil); err != nil {
 		run.Status = "failed"
 		run.UpdatedAt = time.Now().UTC()
 		_ = s.store.UpdateRun(ctx, run)
