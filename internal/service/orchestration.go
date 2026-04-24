@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/goblinsan/agent-service/internal/model"
@@ -282,3 +283,47 @@ func (d *discardResponseWriter) Header() http.Header {
 
 func (d *discardResponseWriter) Write(b []byte) (int, error) { return len(b), nil }
 func (d *discardResponseWriter) WriteHeader(_ int)           {}
+
+// ── Kulrs automation ──────────────────────────────────────────────────────────
+
+// KulrsPaletteRequest is the domain payload accepted from the Kulrs automation
+// system for color-palette analysis jobs.  It is a first-class automation
+// caller type that does not use gateway-chat semantics.
+type KulrsPaletteRequest struct {
+	// WorkflowID links the run to a parent Kulrs workflow, if applicable.
+	WorkflowID string `json:"workflow_id,omitempty"`
+	// ProductID identifies the product whose palette should be analysed.
+	ProductID string `json:"product_id"`
+	// ImageURLs is the list of product image URLs from which to derive the palette.
+	ImageURLs []string `json:"image_urls"`
+	// ModelPreferences expresses the caller's model-selection preferences.
+	ModelPreferences *ModelPreferences `json:"model_preferences,omitempty"`
+	// Metadata is a free-form bag for caller-specific key/value pairs.
+	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+// StartKulrsPaletteRun creates and executes a Kulrs color-palette analysis run.
+// It always operates in sync mode and writes a single JSON AutomationRunResult
+// to w so that the Kulrs caller can consume structured results directly.
+func (s *Service) StartKulrsPaletteRun(ctx context.Context, req *KulrsPaletteRequest, w http.ResponseWriter) error {
+	auto := &AutomationRunRequest{
+		Source:           "kulrs",
+		JobType:          "palette_analysis",
+		WorkflowID:       req.WorkflowID,
+		Prompt:           buildPalettePrompt(req.ProductID, req.ImageURLs),
+		ModelPreferences: req.ModelPreferences,
+		Metadata:         req.Metadata,
+		ResponseMode:     "sync",
+	}
+	return s.StartAutomationRun(ctx, auto, w)
+}
+
+// buildPalettePrompt constructs the agent instruction for a palette analysis job.
+func buildPalettePrompt(productID string, imageURLs []string) string {
+	return fmt.Sprintf(
+		"Analyze the color palette for product %s from the following images: %s. "+
+			"Return the dominant colors, accent colors, and a short palette description.",
+		productID,
+		strings.Join(imageURLs, ", "),
+	)
+}

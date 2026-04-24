@@ -346,8 +346,134 @@ func TestInternalAutomationRun_StoresContext(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// SSE event stream contains expected event types
+// POST /internal/kulrs/palette
 // ---------------------------------------------------------------------------
+
+func TestKulrsPaletteHandler_ValidRequest(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+	router := api.NewRouter(svc)
+
+	body := map[string]any{
+		"product_id": "prod-123",
+		"image_urls": []string{"https://cdn.example.com/a.jpg", "https://cdn.example.com/b.jpg"},
+		"workflow_id": "wf-palette-1",
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/internal/kulrs/palette", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	router.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Header().Get("Content-Type"), "application/json")
+
+	var result map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&result))
+	assert.Equal(t, "completed", result["status"])
+	assert.NotEmpty(t, result["run_id"])
+}
+
+func TestKulrsPaletteHandler_MissingProductID(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+	router := api.NewRouter(svc)
+
+	req := httptest.NewRequest(http.MethodPost, "/internal/kulrs/palette",
+		bytes.NewBufferString(`{"image_urls":["https://example.com/a.jpg"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	router.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestKulrsPaletteHandler_MissingImageURLs(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+	router := api.NewRouter(svc)
+
+	req := httptest.NewRequest(http.MethodPost, "/internal/kulrs/palette",
+		bytes.NewBufferString(`{"product_id":"prod-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	router.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestKulrsPaletteHandler_InvalidJSON(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+	router := api.NewRouter(svc)
+
+	req := httptest.NewRequest(http.MethodPost, "/internal/kulrs/palette",
+		bytes.NewBufferString(`not-json`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	router.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestKulrsPaletteHandler_WithModelPreferences(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+	router := api.NewRouter(svc)
+
+	body := map[string]any{
+		"product_id": "prod-999",
+		"image_urls": []string{"https://cdn.example.com/img.jpg"},
+		"model_preferences": map[string]any{
+			"preferred": "llama3",
+		},
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/internal/kulrs/palette", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	router.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var result map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&result))
+	assert.Equal(t, "llama3", result["model_backend"])
+}
+
+func TestKulrsPaletteHandler_StoresAutomationContext(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+	router := api.NewRouter(svc)
+
+	body := map[string]any{
+		"product_id":  "prod-555",
+		"image_urls":  []string{"https://cdn.example.com/x.jpg"},
+		"workflow_id": "wf-kulrs-99",
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/internal/kulrs/palette", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var run *store.Run
+	for _, r := range ms.runs {
+		run = r
+		break
+	}
+	require.NotNil(t, run)
+	assert.Equal(t, "automation", run.Source)
+	assert.Equal(t, "palette_analysis", run.JobType)
+	assert.Equal(t, "wf-kulrs-99", run.WorkflowID)
+	assert.Equal(t, "completed", run.Status)
+}
 
 func TestInternalChatHandler_SSEEventTypes(t *testing.T) {
 	ms := newMockStore()

@@ -284,3 +284,72 @@ func TestStartAutomationRun_SyncMode_ModelBackendInResult(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&result))
 	assert.Equal(t, "llama3", result.ModelBackend)
 }
+
+// ---------------------------------------------------------------------------
+// StartKulrsPaletteRun
+// ---------------------------------------------------------------------------
+
+func TestStartKulrsPaletteRun_ReturnsCompletedResult(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+
+	req := &service.KulrsPaletteRequest{
+		ProductID: "prod-1",
+		ImageURLs: []string{"https://cdn.example.com/a.jpg"},
+	}
+
+	rr := httptest.NewRecorder()
+	err := svc.StartKulrsPaletteRun(context.Background(), req, rr)
+	require.NoError(t, err)
+
+	var result service.AutomationRunResult
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&result))
+	assert.Equal(t, "completed", result.Status)
+	assert.NotEmpty(t, result.RunID)
+}
+
+func TestStartKulrsPaletteRun_PersistsCorrectRunContext(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+
+	req := &service.KulrsPaletteRequest{
+		ProductID:  "prod-42",
+		ImageURLs:  []string{"https://cdn.example.com/img.jpg"},
+		WorkflowID: "wf-pal-1",
+	}
+
+	rr := httptest.NewRecorder()
+	require.NoError(t, svc.StartKulrsPaletteRun(context.Background(), req, rr))
+
+	var run *store.Run
+	for _, r := range ms.runs {
+		run = r
+		break
+	}
+	require.NotNil(t, run)
+	assert.Equal(t, "automation", run.Source)
+	assert.Equal(t, "palette_analysis", run.JobType)
+	assert.Equal(t, "wf-pal-1", run.WorkflowID)
+	assert.Contains(t, run.Prompt, "prod-42")
+	assert.Contains(t, run.Prompt, "https://cdn.example.com/img.jpg")
+}
+
+func TestStartKulrsPaletteRun_WithModelPreferences(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+
+	req := &service.KulrsPaletteRequest{
+		ProductID: "prod-7",
+		ImageURLs: []string{"https://cdn.example.com/x.jpg"},
+		ModelPreferences: &service.ModelPreferences{
+			Preferred: "llama3",
+		},
+	}
+
+	rr := httptest.NewRecorder()
+	require.NoError(t, svc.StartKulrsPaletteRun(context.Background(), req, rr))
+
+	var result service.AutomationRunResult
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&result))
+	assert.Equal(t, "llama3", result.ModelBackend)
+}

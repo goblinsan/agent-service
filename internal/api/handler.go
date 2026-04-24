@@ -60,6 +60,7 @@ func NewRouterWithOptions(svc *service.Service, opts RouterOptions) http.Handler
 	// automation callers, not for direct browser use.
 	r.Post("/internal/chat", internalChatHandler(svc, opts.Metrics))
 	r.Post("/internal/automation", internalAutomationHandler(svc, opts.Metrics))
+	r.Post("/internal/kulrs/palette", kulrsPaletteHandler(svc, opts.Metrics))
 
 	return r
 }
@@ -184,6 +185,40 @@ func denyHandler(svc *service.Service) http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// kulrsPaletteHandler handles POST /internal/kulrs/palette.
+// It accepts a KulrsPaletteRequest from the Kulrs automation system and returns
+// a single JSON AutomationRunResult once the palette analysis run completes.
+func kulrsPaletteHandler(svc *service.Service, m *metrics.Metrics) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req service.KulrsPaletteRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		if req.ProductID == "" {
+			http.Error(w, `{"error":"product_id is required"}`, http.StatusBadRequest)
+			return
+		}
+		if len(req.ImageURLs) == 0 {
+			http.Error(w, `{"error":"image_urls is required"}`, http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if m != nil {
+			m.TotalRuns.Add(1)
+		}
+		if err := svc.StartKulrsPaletteRun(r.Context(), &req, w); err != nil {
+			if m != nil {
+				m.FailedRuns.Add(1)
+			}
+			slog.Error("kulrs palette run failed", "error", err)
+			http.Error(w, `{"error":"run failed"}`, http.StatusInternalServerError)
+		}
 	}
 }
 

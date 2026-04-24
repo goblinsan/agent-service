@@ -129,8 +129,12 @@ func (a *Adapter) Complete(ctx context.Context, req model.Request) (*model.Respo
 		msgs[i] = toRequestMsg(m)
 	}
 
+	modelName := req.Model
+	if modelName == "" {
+		modelName = "local"
+	}
 	body, err := json.Marshal(chatRequest{
-		Model:     "local",
+		Model:     modelName,
 		Messages:  msgs,
 		MaxTokens: req.MaxTokens,
 		Stream:    false,
@@ -197,8 +201,12 @@ func (a *Adapter) Stream(ctx context.Context, req model.Request, onChunk func(ch
 		msgs[i] = toRequestMsg(m)
 	}
 
+	streamModelName := req.Model
+	if streamModelName == "" {
+		streamModelName = "local"
+	}
 	body, err := json.Marshal(chatRequest{
-		Model:     "local",
+		Model:     streamModelName,
 		Messages:  msgs,
 		MaxTokens: req.MaxTokens,
 		Stream:    true,
