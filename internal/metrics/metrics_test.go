@@ -25,10 +25,34 @@ func TestMetrics_Counters(t *testing.T) {
 	assert.Equal(t, int64(2), snap.ActiveRequests)
 }
 
+func TestMetrics_ExtendedCounters(t *testing.T) {
+	m := &metrics.Metrics{}
+	m.ToolCallsTotal.Add(7)
+	m.ApprovalRequestsTotal.Add(2)
+	m.BackendSelectionsTotal.Add(4)
+
+	snap := m.Snapshot()
+	assert.Equal(t, int64(7), snap.ToolCallsTotal)
+	assert.Equal(t, int64(2), snap.ApprovalRequestsTotal)
+	assert.Equal(t, int64(4), snap.BackendSelectionsTotal)
+}
+
+func TestMetrics_RecordRunCompleted(t *testing.T) {
+	m := &metrics.Metrics{}
+	m.RecordRunCompleted(120)
+	m.RecordRunCompleted(80)
+
+	snap := m.Snapshot()
+	assert.Equal(t, int64(2), snap.RunsCompleted)
+	assert.Equal(t, int64(200), snap.RunLatencyTotalMs)
+}
+
 func TestMetrics_Handler(t *testing.T) {
 	m := &metrics.Metrics{}
 	m.TotalRequests.Add(10)
 	m.TotalRuns.Add(4)
+	m.ToolCallsTotal.Add(3)
+	m.RecordRunCompleted(50)
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	rr := httptest.NewRecorder()
@@ -41,6 +65,9 @@ func TestMetrics_Handler(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&body))
 	assert.Equal(t, int64(10), body["total_requests"])
 	assert.Equal(t, int64(4), body["total_runs"])
+	assert.Equal(t, int64(3), body["tool_calls_total"])
+	assert.Equal(t, int64(1), body["runs_completed"])
+	assert.Equal(t, int64(50), body["run_latency_total_ms"])
 }
 
 func TestMetrics_Middleware(t *testing.T) {
