@@ -18,6 +18,7 @@ import (
 	"github.com/goblinsan/agent-service/internal/metrics"
 	"github.com/goblinsan/agent-service/internal/model"
 	"github.com/goblinsan/agent-service/internal/model/llama"
+	"github.com/goblinsan/agent-service/internal/model/registry"
 	agentrunner "github.com/goblinsan/agent-service/internal/runner"
 	"github.com/goblinsan/agent-service/internal/service"
 	"github.com/goblinsan/agent-service/internal/store"
@@ -43,9 +44,21 @@ func main() {
 	pg := store.NewPostgres(db)
 
 	var provider model.Provider
-	if cfg.LlamaURL != "" {
+	switch {
+	case len(cfg.LLMNodes) > 0:
+		// Multi-node pool: build a registry from the node URLs and wrap it in a Pool.
+		nodes := make([]registry.NodeConfig, len(cfg.LLMNodes))
+		for i, u := range cfg.LLMNodes {
+			nodes[i] = registry.NodeConfig{Name: fmt.Sprintf("node-%d", i+1), URL: u}
+		}
+		reg := registry.New(nodes)
+		provider = registry.NewPool(reg, func(url string) model.Provider {
+			return llama.New(url)
+		})
+		slog.Info("llm-service pool configured", "nodes", len(nodes))
+	case cfg.LlamaURL != "":
 		provider = llama.New(cfg.LlamaURL)
-	} else {
+	default:
 		provider = &noopProvider{}
 	}
 

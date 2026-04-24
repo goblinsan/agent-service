@@ -182,3 +182,58 @@ func TestComplete_SendsToolResultMessages(t *testing.T) {
 	assert.Equal(t, "tool", toolResultMsg["role"])
 	assert.Equal(t, "tc-1", toolResultMsg["tool_call_id"])
 }
+
+func TestComplete_SendsRequestedModelName(t *testing.T) {
+	var capturedModel string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&body)
+		capturedModel, _ = body["model"].(string)
+		resp := map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{
+					"message":       map[string]string{"role": "assistant", "content": "hi"},
+					"finish_reason": "stop",
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	adapter := llama.New(srv.URL)
+	_, err := adapter.Complete(context.Background(), model.Request{
+		Model:    "llama3",
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "llama3", capturedModel)
+}
+
+func TestComplete_DefaultsToLocalWhenModelEmpty(t *testing.T) {
+	var capturedModel string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&body)
+		capturedModel, _ = body["model"].(string)
+		resp := map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{
+					"message":       map[string]string{"role": "assistant", "content": "hi"},
+					"finish_reason": "stop",
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	adapter := llama.New(srv.URL)
+	_, err := adapter.Complete(context.Background(), model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "local", capturedModel)
+}

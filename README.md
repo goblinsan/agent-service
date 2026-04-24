@@ -41,7 +41,8 @@ docker-compose up --build
 | `DATABASE_URL`    | —       | Postgres connection string                                               |
 | `PORT`            | `8080`  | HTTP listen port                                                         |
 | `LOG_LEVEL`       | `info`  | Log level (`debug`, `info`, `warn`)                                      |
-| `LLAMA_URL`       | —       | Base URL of a llama.cpp / OpenAI-compatible model server                 |
+| `LLAMA_URL`       | —       | Base URL of a single llama.cpp / OpenAI-compatible model server          |
+| `LLM_NODES`       | —       | Comma-separated list of llm-service node URLs (takes precedence over `LLAMA_URL` when set) |
 | `AGENT_MAX_STEPS` | `10`    | Maximum number of agent reasoning steps per run                          |
 | `API_KEY`         | —       | When set, enables `X-API-Key` authentication on all endpoints except `/health` and `/metrics` |
 | `MCP_ENDPOINT`    | —       | When set, enables the MCP tool runner targeting the given server URL     |
@@ -113,7 +114,11 @@ GET /sessions/{sessionID}/runs/{runID}/events
 
 - `run.created` – run record created
 - `run.in_progress` – processing started
+- `run.model_selected` – model backend selected for the run
 - `run.step` – intermediate step (one per agent reasoning step)
+- `run.tool_call` – tool invoked by the agent
+- `run.approval_requested` – tool call is awaiting human approval
+- `run.paused` – run suspended pending an external decision
 - `run.completed` – run finished successfully
 - `run.failed` – run failed
 
@@ -152,6 +157,63 @@ Set the `Model` field on a `model.Request` to select a provider:
 req := model.Request{Model: "llama-3", Messages: messages}
 resp, err := r.Complete(ctx, req)
 ```
+
+## Multi-node llm-service Pool
+
+Set `LLM_NODES` to a comma-separated list of llm-service base URLs to treat
+multiple backends as a shared inference pool:
+
+```bash
+export LLM_NODES=http://node1:8080,http://node2:8080,http://node3:8080
+```
+
+The `internal/model/registry` package manages the node registry and pool:
+
+- **`Registry`** tracks the health of each node.  Nodes begin healthy; any
+  failed request marks the offending node as unhealthy so it is skipped by
+  subsequent requests.  Calling `MarkHealthy` restores a node.
+- **`Pool`** implements `model.Provider` and picks the first healthy node that
+  supports the requested model name on every call.  When a node returns an
+  error it is automatically marked as unhealthy.
+
+Each `NodeConfig` may declare a `Models` slice restricting which model names
+the node accepts.  An empty slice means the node accepts any model.
+
+The `Model` field on a `model.Request` is forwarded unchanged to the chosen
+backend.  When the field is empty the llama adapter defaults to `"local"`.
+
+## Kulrs Automation Caller
+
+The `POST /internal/kulrs/palette` endpoint provides a first-class integration
+path for the Kulrs automation system.  It accepts domain-specific payloads
+without gateway-chat semantics and returns a single JSON result:
+
+```
+POST /internal/kulrs/palette
+Content-Type: application/json
+
+{
+  "product_id":  "prod-123",
+  "image_urls":  ["https://cdn.example.com/a.jpg"],
+  "workflow_id": "wf-palette-1",
+  "model_preferences": { "preferred": "llama3" }
+}
+```
+
+Response:
+
+```json
+{
+  "run_id":        "...",
+  "status":        "completed",
+  "output":        "...",
+  "model_backend": "llama3"
+}
+```
+
+The underlying run is stored as an automation run with `source="kulrs"` and
+`job_type="palette_analysis"`, making it queryable alongside other automation
+runs.
 
 ## MCP Tool Runner
 
