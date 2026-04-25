@@ -53,6 +53,7 @@ type ApprovalRequestedPayload struct {
 	ApprovalID string         `json:"approval_id"`
 	ToolName   string         `json:"tool_name"`
 	Params     map[string]any `json:"params"`
+	Reason     string         `json:"reason,omitempty"`
 }
 
 // AssistantDeltaPayload is the data payload for a run.assistant_delta event.
@@ -66,7 +67,16 @@ type Event struct {
 	Data interface{} `json:"data"`
 }
 
+// Observer is implemented by response writers that want access to structured
+// events before they are serialized onto the SSE stream.
+type Observer interface {
+	ObserveEvent(Event)
+}
+
 func Write(w http.ResponseWriter, e Event) error {
+	if observer, ok := w.(Observer); ok {
+		observer.ObserveEvent(e)
+	}
 	data, err := json.Marshal(e)
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)

@@ -111,8 +111,9 @@ func TestStartRun(t *testing.T) {
 	assert.Contains(t, body, "run.created")
 	assert.Contains(t, body, "run.in_progress")
 	assert.Contains(t, body, "run.step")
+	assert.Contains(t, body, "run.assistant_delta")
 	assert.Contains(t, body, "run.completed")
-	assert.Equal(t, 6, strings.Count(body, "data: "), "expected 6 SSE events: created, in_progress, 3 steps, completed")
+	assert.Equal(t, 7, strings.Count(body, "data: "), "expected 7 SSE events: created, in_progress, 3 steps, assistant_delta, completed")
 }
 
 func TestStartRun_RunPersistedAsCompleted(t *testing.T) {
@@ -132,4 +133,3 @@ func TestStartRun_RunPersistedAsCompleted(t *testing.T) {
 	assert.Equal(t, "completed", run.Status)
 	assert.NotEmpty(t, run.Response)
 }
-

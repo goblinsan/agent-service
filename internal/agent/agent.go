@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/goblinsan/agent-service/internal/model"
@@ -147,6 +148,14 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 
 		// No tool calls – check for termination.
 		if resp.FinishReason == "stop" || i == a.maxSteps {
+			for _, chunk := range chunkAssistantContent(resp.Content) {
+				if err := sse.Write(w, sse.Event{
+					Type: sse.EventRunAssistantDelta,
+					Data: sse.AssistantDeltaPayload{RunID: run.ID, Delta: chunk},
+				}); err != nil {
+					return err
+				}
+			}
 			run.Response = resp.Content
 			break
 		}
@@ -225,6 +234,7 @@ func (a *Agent) waitForApproval(ctx context.Context, run *store.Run, w http.Resp
 			ApprovalID: approval.ID,
 			ToolName:   tc.Name,
 			Params:     tc.Params,
+			Reason:     reason,
 		},
 	})
 
@@ -281,4 +291,22 @@ func newID() string {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)
+}
+
+func chunkAssistantContent(content string) []string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil
+	}
+	runes := []rune(content)
+	const chunkSize = 32
+	chunks := make([]string, 0, (len(runes)+chunkSize-1)/chunkSize)
+	for start := 0; start < len(runes); start += chunkSize {
+		end := start + chunkSize
+		if end > len(runes) {
+			end = len(runes)
+		}
+		chunks = append(chunks, string(runes[start:end]))
+	}
+	return chunks
 }

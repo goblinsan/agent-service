@@ -7,9 +7,11 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/goblinsan/agent-service/internal/model"
+	"github.com/goblinsan/agent-service/internal/policy"
 	"github.com/goblinsan/agent-service/internal/sse"
 	"github.com/goblinsan/agent-service/internal/store"
 )
@@ -87,11 +89,18 @@ type AutomationRunRequest struct {
 
 // AutomationRunResult is the response body for sync-mode automation runs.
 type AutomationRunResult struct {
-	RunID        string              `json:"run_id"`
-	Status       string              `json:"status"`
-	Output       string              `json:"output,omitempty"`
-	ModelBackend string              `json:"model_backend,omitempty"`
-	ToolCalls    []store.RunToolCall `json:"tool_calls,omitempty"`
+	RunID              string              `json:"run_id"`
+	Status             string              `json:"status"`
+	Output             string              `json:"output,omitempty"`
+	ModelBackend       string              `json:"model_backend,omitempty"`
+	ToolCalls          []store.RunToolCall `json:"tool_calls,omitempty"`
+	OrchestrationState *OrchestrationState `json:"orchestration_state,omitempty"`
+}
+
+type OrchestrationState struct {
+	CheckpointID      string   `json:"checkpointId,omitempty"`
+	Reason            string   `json:"reason,omitempty"`
+	RequiredApprovers []string `json:"requiredApprovers,omitempty"`
 }
 
 // GatewayRunRequest is the sync JSON contract currently used by the
@@ -191,38 +200,13 @@ func (s *Service) StartChatRun(ctx context.Context, req *ChatRunRequest, w http.
 		return err
 	}
 
-	start := time.Now()
-	if err := s.agent.RunWithMessages(ctx, run, w, buildRunPolicy(req.ToolPolicy), initialMessages); err != nil {
-		run.Status = "failed"
-		run.UpdatedAt = time.Now().UTC()
-		_ = s.store.UpdateRun(ctx, run)
-		_ = sse.Write(w, sse.Event{Type: sse.EventRunFailed, Data: run})
-		slog.Error("chat run failed",
-			"run_id", run.ID,
-			"request_id", run.RequestID,
-			"thread_id", run.ThreadID,
-			"latency_ms", time.Since(start).Milliseconds(),
-		)
-		s.recordRunMetrics(run, time.Since(start))
-		return fmt.Errorf("agent run: %w", err)
+	observer := newObservedRunWriter(w)
+	done := s.startManagedRun(run, observer, buildRunPolicy(req.ToolPolicy), initialMessages)
+	paused, err := s.waitForRunOutcome(ctx, run, observer, done)
+	if paused != nil {
+		return nil
 	}
-
-	run.Status = "completed"
-	run.UpdatedAt = time.Now().UTC()
-	if err := s.store.UpdateRun(ctx, run); err != nil {
-		return fmt.Errorf("update run completed: %w", err)
-	}
-	latency := time.Since(start)
-	slog.Info("chat run completed",
-		"run_id", run.ID,
-		"request_id", run.RequestID,
-		"thread_id", run.ThreadID,
-		"latency_ms", latency.Milliseconds(),
-		"tool_calls", len(run.ToolCalls),
-		"approval_recs", len(run.ApprovalRecs),
-	)
-	s.recordRunMetrics(run, latency)
-	return sse.Write(w, sse.Event{Type: sse.EventRunCompleted, Data: run})
+	return err
 }
 
 // StartGatewayRun executes the gateway-chat-platform's current sync JSON
@@ -317,26 +301,30 @@ func (s *Service) StartChatRunSync(ctx context.Context, req *ChatRunRequest, w h
 	if err := s.store.UpdateRun(ctx, run); err != nil {
 		return fmt.Errorf("update run in_progress: %w", err)
 	}
-	dw := &discardResponseWriter{}
-	start := time.Now()
-	if err := s.agent.RunWithMessages(ctx, run, dw, buildRunPolicy(req.ToolPolicy), initialMessages); err != nil {
-		run.Status = "failed"
-		run.UpdatedAt = time.Now().UTC()
-		_ = s.store.UpdateRun(ctx, run)
-		s.recordRunMetrics(run, time.Since(start))
-		return fmt.Errorf("agent run: %w", err)
+	observer := newObservedRunWriter(nil)
+	done := s.startManagedRun(run, observer, buildRunPolicy(req.ToolPolicy), initialMessages)
+	paused, err := s.waitForRunOutcome(ctx, run, observer, done)
+	if err != nil {
+		return err
 	}
-	run.Status = "completed"
-	run.UpdatedAt = time.Now().UTC()
-	if err := s.store.UpdateRun(ctx, run); err != nil {
-		return fmt.Errorf("update run completed: %w", err)
-	}
-	s.recordRunMetrics(run, time.Since(start))
 	resp := GatewayRunResponse{
 		AgentID:        req.AgentID,
 		UsedProvider:   "agent-service",
 		Model:          firstNonEmpty(run.ModelBackend, preferredModel(req.ModelPreferences)),
 		ResultThreadID: req.ThreadID,
+	}
+	if paused != nil {
+		resp.Status = "approval_required"
+		resp.OrchestrationState = &struct {
+			CheckpointID      string   `json:"checkpointId,omitempty"`
+			Reason            string   `json:"reason,omitempty"`
+			RequiredApprovers []string `json:"requiredApprovers,omitempty"`
+		}{
+			CheckpointID:      paused.CheckpointID,
+			Reason:            paused.Reason,
+			RequiredApprovers: paused.RequiredApprovers,
+		}
+		return json.NewEncoder(w).Encode(resp)
 	}
 	resp.Message.Role = string(model.RoleAssistant)
 	resp.Message.Content = run.Response
@@ -405,36 +393,13 @@ func (s *Service) streamAutomationRun(ctx context.Context, run *store.Run, w htt
 		"job_type", run.JobType,
 		"model_backend", run.ModelBackend,
 	)
-
-	start := time.Now()
-	if err := s.agent.RunWithMessages(ctx, run, w, nil, initialMessages); err != nil {
-		run.Status = "failed"
-		run.UpdatedAt = time.Now().UTC()
-		_ = s.store.UpdateRun(ctx, run)
-		_ = sse.Write(w, sse.Event{Type: sse.EventRunFailed, Data: run})
-		slog.Error("automation run failed",
-			"run_id", run.ID,
-			"workflow_id", run.WorkflowID,
-			"latency_ms", time.Since(start).Milliseconds(),
-		)
-		s.recordRunMetrics(run, time.Since(start))
-		return fmt.Errorf("agent run: %w", err)
+	observer := newObservedRunWriter(w)
+	done := s.startManagedRun(run, observer, nil, initialMessages)
+	paused, err := s.waitForRunOutcome(ctx, run, observer, done)
+	if paused != nil {
+		return nil
 	}
-
-	run.Status = "completed"
-	run.UpdatedAt = time.Now().UTC()
-	if err := s.store.UpdateRun(ctx, run); err != nil {
-		return fmt.Errorf("update run completed: %w", err)
-	}
-	latency := time.Since(start)
-	slog.Info("automation run completed",
-		"run_id", run.ID,
-		"workflow_id", run.WorkflowID,
-		"latency_ms", latency.Milliseconds(),
-		"tool_calls", len(run.ToolCalls),
-	)
-	s.recordRunMetrics(run, latency)
-	return sse.Write(w, sse.Event{Type: sse.EventRunCompleted, Data: run})
+	return err
 }
 
 // syncAutomationRun runs an automation request to completion and writes the
@@ -452,43 +417,182 @@ func (s *Service) syncAutomationRun(ctx context.Context, run *store.Run, w http.
 		"job_type", run.JobType,
 		"model_backend", run.ModelBackend,
 	)
-
-	dw := &discardResponseWriter{}
-	start := time.Now()
-	if err := s.agent.RunWithMessages(ctx, run, dw, nil, initialMessages); err != nil {
-		run.Status = "failed"
-		run.UpdatedAt = time.Now().UTC()
-		_ = s.store.UpdateRun(ctx, run)
-		slog.Error("automation run failed",
-			"run_id", run.ID,
-			"workflow_id", run.WorkflowID,
-			"latency_ms", time.Since(start).Milliseconds(),
-		)
-		s.recordRunMetrics(run, time.Since(start))
-		return fmt.Errorf("agent run: %w", err)
+	observer := newObservedRunWriter(nil)
+	done := s.startManagedRun(run, observer, nil, initialMessages)
+	paused, err := s.waitForRunOutcome(ctx, run, observer, done)
+	if err != nil {
+		return err
 	}
 
-	run.Status = "completed"
-	run.UpdatedAt = time.Now().UTC()
-	if err := s.store.UpdateRun(ctx, run); err != nil {
-		return fmt.Errorf("update run completed: %w", err)
-	}
-	latency := time.Since(start)
-	slog.Info("automation run completed",
-		"run_id", run.ID,
-		"workflow_id", run.WorkflowID,
-		"latency_ms", latency.Milliseconds(),
-		"tool_calls", len(run.ToolCalls),
-	)
-	s.recordRunMetrics(run, latency)
-
-	return json.NewEncoder(w).Encode(AutomationRunResult{
+	resp := AutomationRunResult{
 		RunID:        run.ID,
 		Status:       "completed",
 		Output:       run.Response,
 		ModelBackend: run.ModelBackend,
 		ToolCalls:    run.ToolCalls,
-	})
+	}
+	if paused != nil {
+		resp.Status = "approval_required"
+		resp.OrchestrationState = paused
+		resp.Output = ""
+	}
+	return json.NewEncoder(w).Encode(resp)
+}
+
+type runSignalKind string
+
+const (
+	runSignalPaused    runSignalKind = "paused"
+	runSignalCompleted runSignalKind = "completed"
+	runSignalFailed    runSignalKind = "failed"
+)
+
+type runSignal struct {
+	kind       runSignalKind
+	approvalID string
+	reason     string
+}
+
+type observedRunWriter struct {
+	header         http.Header
+	forward        http.ResponseWriter
+	forwardEnabled bool
+	mu             sync.Mutex
+	signals        chan runSignal
+	latestApproval *sse.ApprovalRequestedPayload
+}
+
+func newObservedRunWriter(forward http.ResponseWriter) *observedRunWriter {
+	return &observedRunWriter{
+		header:         make(http.Header),
+		forward:        forward,
+		forwardEnabled: forward != nil,
+		signals:        make(chan runSignal, 16),
+	}
+}
+
+func (w *observedRunWriter) Header() http.Header {
+	if w.forward != nil {
+		return w.forward.Header()
+	}
+	return w.header
+}
+
+func (w *observedRunWriter) Write(b []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.forwardEnabled || w.forward == nil {
+		return len(b), nil
+	}
+	return w.forward.Write(b)
+}
+
+func (w *observedRunWriter) WriteHeader(statusCode int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.forwardEnabled || w.forward == nil {
+		return
+	}
+	w.forward.WriteHeader(statusCode)
+}
+
+func (w *observedRunWriter) ObserveEvent(event sse.Event) {
+	switch event.Type {
+	case sse.EventRunApprovalRequested:
+		if payload, ok := event.Data.(sse.ApprovalRequestedPayload); ok {
+			payloadCopy := payload
+			w.latestApproval = &payloadCopy
+		}
+	case sse.EventRunPaused:
+		signal := runSignal{kind: runSignalPaused}
+		if w.latestApproval != nil {
+			signal.approvalID = w.latestApproval.ApprovalID
+			signal.reason = w.latestApproval.Reason
+		}
+		w.emitSignal(signal)
+	case sse.EventRunCompleted:
+		w.emitSignal(runSignal{kind: runSignalCompleted})
+	case sse.EventRunFailed:
+		w.emitSignal(runSignal{kind: runSignalFailed})
+	}
+}
+
+func (w *observedRunWriter) DisableForwarding() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.forwardEnabled = false
+}
+
+func (w *observedRunWriter) emitSignal(signal runSignal) {
+	select {
+	case w.signals <- signal:
+	default:
+	}
+}
+
+func (s *Service) startManagedRun(run *store.Run, writer http.ResponseWriter, runPolicy policy.Policy, initialMessages []model.Message) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		start := time.Now()
+		err := s.agent.RunWithMessages(context.Background(), run, writer, runPolicy, initialMessages)
+		if err != nil {
+			run.Status = "failed"
+			run.UpdatedAt = time.Now().UTC()
+			_ = s.store.UpdateRun(context.Background(), run)
+			_ = sse.Write(writer, sse.Event{Type: sse.EventRunFailed, Data: run})
+			s.recordRunMetrics(run, time.Since(start))
+			done <- fmt.Errorf("agent run: %w", err)
+			return
+		}
+
+		run.Status = "completed"
+		run.PausedState = ""
+		run.UpdatedAt = time.Now().UTC()
+		if err := s.store.UpdateRun(context.Background(), run); err != nil {
+			done <- fmt.Errorf("update run completed: %w", err)
+			return
+		}
+		s.recordRunMetrics(run, time.Since(start))
+		done <- sse.Write(writer, sse.Event{Type: sse.EventRunCompleted, Data: run})
+	}()
+	return done
+}
+
+func (s *Service) waitForRunOutcome(ctx context.Context, run *store.Run, writer *observedRunWriter, done <-chan error) (*OrchestrationState, error) {
+	for {
+		select {
+		case signal := <-writer.signals:
+			if signal.kind != runSignalPaused {
+				continue
+			}
+			run.PausedState = buildPausedState(signal.approvalID, signal.reason)
+			run.UpdatedAt = time.Now().UTC()
+			_ = s.store.UpdateRun(context.Background(), run)
+			writer.DisableForwarding()
+			return &OrchestrationState{
+				CheckpointID: signal.approvalID,
+				Reason:       firstNonEmpty(signal.reason, "Awaiting approval"),
+			}, nil
+		case err := <-done:
+			return nil, err
+		case <-ctx.Done():
+			writer.DisableForwarding()
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func buildPausedState(approvalID, reason string) string {
+	state := map[string]string{
+		"type":        "approval_required",
+		"approval_id": approvalID,
+		"reason":      reason,
+	}
+	raw, err := json.Marshal(state)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
 }
 
 // discardResponseWriter is an http.ResponseWriter that silently discards all

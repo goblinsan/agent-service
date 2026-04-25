@@ -222,7 +222,19 @@ func TestE2E_ChatRun_ApprovalRequired_Approved(t *testing.T) {
 
 	<-done
 
-	assert.Contains(t, rr.Body.String(), "run.completed")
+	assert.Contains(t, rr.Body.String(), "run.paused")
+
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, run := range ms.runs {
+			if run.Status == "completed" {
+				assert.Equal(t, "sensitive-output", run.ToolCalls[0].Result)
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("expected paused run to resume and complete after approval")
 }
 
 // ---------------------------------------------------------------------------
