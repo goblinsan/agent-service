@@ -60,11 +60,20 @@ func NewWithOptions(p model.Provider, s store.Store, maxSteps int, opts Options)
 // runPolicy, if non-nil, overrides (or combines with) the agent's base policy
 // for this specific run.
 func (a *Agent) Run(ctx context.Context, run *store.Run, w http.ResponseWriter, runPolicy policy.Policy) error {
+	return a.RunWithMessages(ctx, run, w, runPolicy, nil)
+}
+
+// RunWithMessages executes the agent loop using the supplied initial message
+// history instead of reconstructing it from run.Prompt alone.
+func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.ResponseWriter, runPolicy policy.Policy, initialMessages []model.Message) error {
 	// Resolve effective policy for this run.
 	pol := effectivePolicy(a.policy, runPolicy)
 
-	messages := []model.Message{
-		{Role: model.RoleUser, Content: run.Prompt},
+	messages := append([]model.Message(nil), initialMessages...)
+	if len(messages) == 0 {
+		messages = []model.Message{
+			{Role: model.RoleUser, Content: run.Prompt},
+		}
 	}
 
 	// Steps are 1-based to align with human-readable step numbers in traces and SSE events.

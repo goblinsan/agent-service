@@ -71,6 +71,9 @@ type AutomationRunRequest struct {
 	WorkflowID string `json:"workflow_id,omitempty"`
 	// Prompt is the primary instruction for the agent.
 	Prompt string `json:"prompt,omitempty"`
+	// Messages, when provided, carry the full normalized conversation/history for
+	// the automation run and take precedence over Prompt+Context prompt building.
+	Messages []model.Message `json:"messages,omitempty"`
 	// Context is a free-form map of additional data passed as context.
 	Context map[string]any `json:"context,omitempty"`
 	// ModelPreferences expresses the caller's model-selection preferences.
@@ -91,18 +94,48 @@ type AutomationRunResult struct {
 	ToolCalls    []store.RunToolCall `json:"tool_calls,omitempty"`
 }
 
+// GatewayRunRequest is the sync JSON contract currently used by the
+// gateway-chat-platform internal agent-service client.
+type GatewayRunRequest struct {
+	AgentID        string          `json:"agentId"`
+	Model          string          `json:"model,omitempty"`
+	Messages       []model.Message `json:"messages"`
+	Temperature    *float64        `json:"temperature,omitempty"`
+	MaxTokens      int             `json:"maxTokens,omitempty"`
+	ModelParams    map[string]any  `json:"modelParams,omitempty"`
+	WorkflowID     string          `json:"workflowId,omitempty"`
+	WorkflowSource string          `json:"workflowSource,omitempty"`
+	DeliveryMode   string          `json:"deliveryMode,omitempty"`
+	UserID         string          `json:"userId,omitempty"`
+	ChannelID      string          `json:"channelId,omitempty"`
+	ThreadID       string          `json:"threadId,omitempty"`
+}
+
+// GatewayRunResponse mirrors the gateway's existing internal client contract.
+type GatewayRunResponse struct {
+	AgentID      string `json:"agentId"`
+	UsedProvider string `json:"usedProvider"`
+	Model        string `json:"model"`
+	Message      struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	} `json:"message"`
+	Status             string `json:"status,omitempty"`
+	OrchestrationState *struct {
+		CheckpointID      string   `json:"checkpointId,omitempty"`
+		Reason            string   `json:"reason,omitempty"`
+		RequiredApprovers []string `json:"requiredApprovers,omitempty"`
+	} `json:"orchestrationState,omitempty"`
+	ResultThreadID string `json:"resultThreadId,omitempty"`
+}
+
 // StartChatRun creates a run from a gateway-chat-platform request and streams
 // structured SSE events to w until the run completes or fails.
 func (s *Service) StartChatRun(ctx context.Context, req *ChatRunRequest, w http.ResponseWriter) error {
-	// Derive a prompt string for the run record: use the last user message from
-	// the conversation history if present; otherwise fall back to SystemPrompt.
-	// The full message history is passed to the model separately by the agent.
-	prompt := req.SystemPrompt
-	for _, m := range req.Messages {
-		if m.Role == model.RoleUser {
-			prompt = m.Content
-		}
-	}
+	// Derive a prompt string for the run record while preserving the full message
+	// history for the model call itself.
+	initialMessages := buildChatMessages(req)
+	prompt := derivePrompt(initialMessages, req.SystemPrompt)
 
 	modelBackend := ""
 	if req.ModelPreferences != nil {
@@ -159,7 +192,7 @@ func (s *Service) StartChatRun(ctx context.Context, req *ChatRunRequest, w http.
 	}
 
 	start := time.Now()
-	if err := s.agent.Run(ctx, run, w, buildRunPolicy(req.ToolPolicy)); err != nil {
+	if err := s.agent.RunWithMessages(ctx, run, w, buildRunPolicy(req.ToolPolicy), initialMessages); err != nil {
 		run.Status = "failed"
 		run.UpdatedAt = time.Now().UTC()
 		_ = s.store.UpdateRun(ctx, run)
@@ -192,6 +225,124 @@ func (s *Service) StartChatRun(ctx context.Context, req *ChatRunRequest, w http.
 	return sse.Write(w, sse.Event{Type: sse.EventRunCompleted, Data: run})
 }
 
+// StartGatewayRun executes the gateway-chat-platform's current sync JSON
+// contract while preserving the full conversation context passed by the caller.
+func (s *Service) StartGatewayRun(ctx context.Context, req *GatewayRunRequest, w http.ResponseWriter) error {
+	if len(req.Messages) == 0 {
+		return fmt.Errorf("messages is required")
+	}
+	source := string(store.RunSourceChat)
+	if req.WorkflowID != "" || req.DeliveryMode != "" || req.ChannelID != "" {
+		source = string(store.RunSourceAutomation)
+	}
+	run := &store.Run{
+		ID:           newID(),
+		SessionID:    req.ThreadID,
+		Source:       source,
+		Prompt:       derivePrompt(req.Messages, ""),
+		Status:       "created",
+		ModelBackend: req.Model,
+		ThreadID:     req.ThreadID,
+		UserID:       req.UserID,
+		AgentID:      req.AgentID,
+		WorkflowID:   req.WorkflowID,
+		JobType:      req.WorkflowSource,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}
+	if err := s.store.CreateRun(ctx, run); err != nil {
+		return fmt.Errorf("create run: %w", err)
+	}
+	run.Status = "in_progress"
+	run.UpdatedAt = time.Now().UTC()
+	if err := s.store.UpdateRun(ctx, run); err != nil {
+		return fmt.Errorf("update run in_progress: %w", err)
+	}
+	dw := &discardResponseWriter{}
+	start := time.Now()
+	if err := s.agent.RunWithMessages(ctx, run, dw, nil, req.Messages); err != nil {
+		run.Status = "failed"
+		run.UpdatedAt = time.Now().UTC()
+		_ = s.store.UpdateRun(ctx, run)
+		s.recordRunMetrics(run, time.Since(start))
+		return fmt.Errorf("agent run: %w", err)
+	}
+	run.Status = "completed"
+	run.UpdatedAt = time.Now().UTC()
+	if err := s.store.UpdateRun(ctx, run); err != nil {
+		return fmt.Errorf("update run completed: %w", err)
+	}
+	s.recordRunMetrics(run, time.Since(start))
+	resp := GatewayRunResponse{
+		AgentID:        req.AgentID,
+		UsedProvider:   "agent-service",
+		Model:          firstNonEmpty(run.ModelBackend, req.Model),
+		ResultThreadID: req.ThreadID,
+	}
+	resp.Message.Role = string(model.RoleAssistant)
+	resp.Message.Content = run.Response
+	return json.NewEncoder(w).Encode(resp)
+}
+
+// StartChatRunSync creates a run from a gateway-chat-platform request and
+// returns a single JSON response instead of streaming SSE events.
+func (s *Service) StartChatRunSync(ctx context.Context, req *ChatRunRequest, w http.ResponseWriter) error {
+	initialMessages := buildChatMessages(req)
+	prompt := derivePrompt(initialMessages, req.SystemPrompt)
+
+	modelBackend := ""
+	if req.ModelPreferences != nil {
+		modelBackend = req.ModelPreferences.Preferred
+	}
+
+	run := &store.Run{
+		ID:           newID(),
+		SessionID:    req.ThreadID,
+		Source:       string(store.RunSourceChat),
+		Prompt:       prompt,
+		Status:       "created",
+		ModelBackend: modelBackend,
+		RequestID:    req.RequestID,
+		ThreadID:     req.ThreadID,
+		UserID:       req.UserID,
+		AgentID:      req.AgentID,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}
+	if err := s.store.CreateRun(ctx, run); err != nil {
+		return fmt.Errorf("create run: %w", err)
+	}
+	run.Status = "in_progress"
+	run.UpdatedAt = time.Now().UTC()
+	if err := s.store.UpdateRun(ctx, run); err != nil {
+		return fmt.Errorf("update run in_progress: %w", err)
+	}
+	dw := &discardResponseWriter{}
+	start := time.Now()
+	if err := s.agent.RunWithMessages(ctx, run, dw, buildRunPolicy(req.ToolPolicy), initialMessages); err != nil {
+		run.Status = "failed"
+		run.UpdatedAt = time.Now().UTC()
+		_ = s.store.UpdateRun(ctx, run)
+		s.recordRunMetrics(run, time.Since(start))
+		return fmt.Errorf("agent run: %w", err)
+	}
+	run.Status = "completed"
+	run.UpdatedAt = time.Now().UTC()
+	if err := s.store.UpdateRun(ctx, run); err != nil {
+		return fmt.Errorf("update run completed: %w", err)
+	}
+	s.recordRunMetrics(run, time.Since(start))
+	resp := GatewayRunResponse{
+		AgentID:        req.AgentID,
+		UsedProvider:   "agent-service",
+		Model:          firstNonEmpty(run.ModelBackend, preferredModel(req.ModelPreferences)),
+		ResultThreadID: req.ThreadID,
+	}
+	resp.Message.Role = string(model.RoleAssistant)
+	resp.Message.Content = run.Response
+	return json.NewEncoder(w).Encode(resp)
+}
+
 // StartAutomationRun creates a run from an automation caller's request.
 // When ResponseMode is "stream", structured SSE events are written to w.
 // When ResponseMode is "sync" or empty (the default), the agent runs to
@@ -202,10 +353,11 @@ func (s *Service) StartAutomationRun(ctx context.Context, req *AutomationRunRequ
 		modelBackend = req.ModelPreferences.Preferred
 	}
 
+	initialMessages := buildAutomationMessages(req)
 	run := &store.Run{
 		ID:           newID(),
 		Source:       string(store.RunSourceAutomation),
-		Prompt:       req.Prompt,
+		Prompt:       derivePrompt(initialMessages, req.Prompt),
 		Status:       "created",
 		ModelBackend: modelBackend,
 		WorkflowID:   req.WorkflowID,
@@ -218,13 +370,13 @@ func (s *Service) StartAutomationRun(ctx context.Context, req *AutomationRunRequ
 	}
 
 	if req.ResponseMode == "stream" {
-		return s.streamAutomationRun(ctx, run, w)
+		return s.streamAutomationRun(ctx, run, w, initialMessages)
 	}
-	return s.syncAutomationRun(ctx, run, w)
+	return s.syncAutomationRun(ctx, run, w, initialMessages)
 }
 
 // streamAutomationRun runs an automation request and emits SSE events to w.
-func (s *Service) streamAutomationRun(ctx context.Context, run *store.Run, w http.ResponseWriter) error {
+func (s *Service) streamAutomationRun(ctx context.Context, run *store.Run, w http.ResponseWriter, initialMessages []model.Message) error {
 	if err := sse.Write(w, sse.Event{Type: sse.EventRunCreated, Data: run}); err != nil {
 		return err
 	}
@@ -255,7 +407,7 @@ func (s *Service) streamAutomationRun(ctx context.Context, run *store.Run, w htt
 	)
 
 	start := time.Now()
-	if err := s.agent.Run(ctx, run, w, nil); err != nil {
+	if err := s.agent.RunWithMessages(ctx, run, w, nil, initialMessages); err != nil {
 		run.Status = "failed"
 		run.UpdatedAt = time.Now().UTC()
 		_ = s.store.UpdateRun(ctx, run)
@@ -287,7 +439,7 @@ func (s *Service) streamAutomationRun(ctx context.Context, run *store.Run, w htt
 
 // syncAutomationRun runs an automation request to completion and writes the
 // result as a single JSON response.
-func (s *Service) syncAutomationRun(ctx context.Context, run *store.Run, w http.ResponseWriter) error {
+func (s *Service) syncAutomationRun(ctx context.Context, run *store.Run, w http.ResponseWriter, initialMessages []model.Message) error {
 	run.Status = "in_progress"
 	run.UpdatedAt = time.Now().UTC()
 	if err := s.store.UpdateRun(ctx, run); err != nil {
@@ -303,7 +455,7 @@ func (s *Service) syncAutomationRun(ctx context.Context, run *store.Run, w http.
 
 	dw := &discardResponseWriter{}
 	start := time.Now()
-	if err := s.agent.Run(ctx, run, dw, nil); err != nil {
+	if err := s.agent.RunWithMessages(ctx, run, dw, nil, initialMessages); err != nil {
 		run.Status = "failed"
 		run.UpdatedAt = time.Now().UTC()
 		_ = s.store.UpdateRun(ctx, run)
@@ -398,4 +550,65 @@ func buildPalettePrompt(productID string, imageURLs []string) string {
 		productID,
 		strings.Join(imageURLs, ", "),
 	)
+}
+
+func buildChatMessages(req *ChatRunRequest) []model.Message {
+	messages := make([]model.Message, 0, len(req.Messages)+1)
+	if req.SystemPrompt != "" {
+		messages = append(messages, model.Message{Role: model.RoleSystem, Content: req.SystemPrompt})
+	}
+	messages = append(messages, req.Messages...)
+	return messages
+}
+
+func buildAutomationMessages(req *AutomationRunRequest) []model.Message {
+	if len(req.Messages) > 0 {
+		return append([]model.Message(nil), req.Messages...)
+	}
+	userContent := req.Prompt
+	if len(req.Context) > 0 {
+		if raw, err := json.Marshal(req.Context); err == nil {
+			userContent = fmt.Sprintf("%s\n\nContext JSON:\n%s", userContent, string(raw))
+		}
+	}
+	if len(req.Metadata) > 0 {
+		if raw, err := json.Marshal(req.Metadata); err == nil {
+			userContent = fmt.Sprintf("%s\n\nMetadata JSON:\n%s", userContent, string(raw))
+		}
+	}
+	var messages []model.Message
+	if req.Source != "" || req.JobType != "" || req.WorkflowID != "" {
+		systemContent := fmt.Sprintf("Automation source: %s\nJob type: %s\nWorkflow ID: %s", req.Source, req.JobType, req.WorkflowID)
+		messages = append(messages, model.Message{Role: model.RoleSystem, Content: strings.TrimSpace(systemContent)})
+	}
+	return append(messages, model.Message{Role: model.RoleUser, Content: strings.TrimSpace(userContent)})
+}
+
+func derivePrompt(messages []model.Message, fallback string) string {
+	prompt := fallback
+	for _, m := range messages {
+		if m.Role == model.RoleUser {
+			prompt = m.Content
+		}
+	}
+	if prompt == "" && len(messages) > 0 {
+		prompt = messages[len(messages)-1].Content
+	}
+	return prompt
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func preferredModel(prefs *ModelPreferences) string {
+	if prefs == nil {
+		return ""
+	}
+	return prefs.Preferred
 }

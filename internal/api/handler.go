@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -64,6 +65,7 @@ func NewRouterWithOptions(svc *service.Service, opts RouterOptions) http.Handler
 	// automation callers, not for direct browser use.
 	r.Post("/internal/chat", internalChatHandler(svc, opts.Metrics))
 	r.Post("/internal/automation", internalAutomationHandler(svc, opts.Metrics))
+	r.Post("/run", gatewayRunHandler(svc, opts.Metrics))
 	r.Post("/internal/kulrs/palette", kulrsPaletteHandler(svc, opts.Metrics))
 
 	return r
@@ -266,8 +268,9 @@ func kulrsPaletteHandler(svc *service.Service, m *metrics.Metrics) http.HandlerF
 }
 
 // internalChatHandler handles POST /internal/chat.
-// It accepts a ChatRunRequest from the gateway-chat-platform and streams
-// structured SSE run events back to the caller.
+// It accepts a ChatRunRequest from the gateway-chat-platform and either streams
+// structured SSE run events or returns a sync JSON response when the caller asks
+// for application/json.
 func internalChatHandler(svc *service.Service, m *metrics.Metrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req service.ChatRunRequest
@@ -280,14 +283,26 @@ func internalChatHandler(svc *service.Service, m *metrics.Metrics) http.HandlerF
 			return
 		}
 
+		if m != nil {
+			m.TotalRuns.Add(1)
+		}
+		if strings.Contains(r.Header.Get("Accept"), "application/json") {
+			w.Header().Set("Content-Type", "application/json")
+			if err := svc.StartChatRunSync(r.Context(), &req, w); err != nil {
+				if m != nil {
+					m.FailedRuns.Add(1)
+				}
+				slog.Error("chat run failed", "error", err)
+				http.Error(w, `{"error":"run failed"}`, http.StatusInternalServerError)
+			}
+			return
+		}
+
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
 
-		if m != nil {
-			m.TotalRuns.Add(1)
-		}
 		if err := svc.StartChatRun(r.Context(), &req, w); err != nil {
 			if m != nil {
 				m.FailedRuns.Add(1)
@@ -349,3 +364,32 @@ func internalAutomationHandler(svc *service.Service, m *metrics.Metrics) http.Ha
 	}
 }
 
+// gatewayRunHandler handles POST /run.
+// It is a compatibility endpoint used by gateway-chat-platform's current
+// internal agent-service client. The request and response shapes mirror the
+// gateway's normalized sync contract rather than the richer internal SSE APIs.
+func gatewayRunHandler(svc *service.Service, m *metrics.Metrics) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req service.GatewayRunRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		if len(req.Messages) == 0 {
+			http.Error(w, `{"error":"messages is required"}`, http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if m != nil {
+			m.TotalRuns.Add(1)
+		}
+		if err := svc.StartGatewayRun(r.Context(), &req, w); err != nil {
+			if m != nil {
+				m.FailedRuns.Add(1)
+			}
+			slog.Error("gateway compatibility run failed", "error", err)
+			http.Error(w, `{"error":"run failed"}`, http.StatusInternalServerError)
+		}
+	}
+}

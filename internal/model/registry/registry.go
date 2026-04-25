@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const nodeRetryCooldown = 30 * time.Second
+
 // NodeConfig describes a single llm-service backend node.
 type NodeConfig struct {
 	// Name is a human-readable label for this node (e.g. "node-1").
@@ -51,11 +53,16 @@ func New(configs []NodeConfig) *Registry {
 // requested model name.  When model is empty any healthy node qualifies.
 // Returns nil when no suitable node is available.
 func (r *Registry) Pick(model string) *NodeConfig {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
 	for _, n := range r.nodes {
 		if !n.healthy {
-			continue
+			if !n.lastFailure.IsZero() && now.Sub(n.lastFailure) >= nodeRetryCooldown {
+				n.healthy = true
+			} else {
+				continue
+			}
 		}
 		if supportsModel(n.config.Models, model) {
 			c := n.config

@@ -46,6 +46,7 @@ func (p *Pool) Complete(ctx context.Context, req model.Request) (*model.Response
 		p.registry.MarkFailed(node.URL)
 		return nil, err
 	}
+	p.registry.MarkHealthy(node.URL)
 	return resp, nil
 }
 
@@ -59,8 +60,10 @@ func (p *Pool) Stream(ctx context.Context, req model.Request, onChunk func(strin
 	err := prov.Stream(ctx, req, onChunk)
 	if err != nil {
 		p.registry.MarkFailed(node.URL)
+		return err
 	}
-	return err
+	p.registry.MarkHealthy(node.URL)
+	return nil
 }
 
 // provider returns the cached provider for url, creating it on first access.
