@@ -98,6 +98,7 @@ type AutomationRunResult struct {
 }
 
 type OrchestrationState struct {
+	RunID             string   `json:"runId,omitempty"`
 	CheckpointID      string   `json:"checkpointId,omitempty"`
 	Reason            string   `json:"reason,omitempty"`
 	RequiredApprovers []string `json:"requiredApprovers,omitempty"`
@@ -131,6 +132,7 @@ type GatewayRunResponse struct {
 	} `json:"message"`
 	Status             string `json:"status,omitempty"`
 	OrchestrationState *struct {
+		RunID             string   `json:"runId,omitempty"`
 		CheckpointID      string   `json:"checkpointId,omitempty"`
 		Reason            string   `json:"reason,omitempty"`
 		RequiredApprovers []string `json:"requiredApprovers,omitempty"`
@@ -316,10 +318,12 @@ func (s *Service) StartChatRunSync(ctx context.Context, req *ChatRunRequest, w h
 	if paused != nil {
 		resp.Status = "approval_required"
 		resp.OrchestrationState = &struct {
+			RunID             string   `json:"runId,omitempty"`
 			CheckpointID      string   `json:"checkpointId,omitempty"`
 			Reason            string   `json:"reason,omitempty"`
 			RequiredApprovers []string `json:"requiredApprovers,omitempty"`
 		}{
+			RunID:             paused.RunID,
 			CheckpointID:      paused.CheckpointID,
 			Reason:            paused.Reason,
 			RequiredApprovers: paused.RequiredApprovers,
@@ -570,6 +574,7 @@ func (s *Service) waitForRunOutcome(ctx context.Context, run *store.Run, writer 
 			_ = s.store.UpdateRun(context.Background(), run)
 			writer.DisableForwarding()
 			return &OrchestrationState{
+				RunID:        run.ID,
 				CheckpointID: signal.approvalID,
 				Reason:       firstNonEmpty(signal.reason, "Awaiting approval"),
 			}, nil
