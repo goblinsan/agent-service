@@ -52,6 +52,10 @@ func main() {
 			nodes[i] = registry.NodeConfig{Name: fmt.Sprintf("node-%d", i+1), URL: u}
 		}
 		reg := registry.New(nodes)
+		if err := refreshNodeRegistry(context.Background(), reg); err != nil {
+			slog.Warn("initial llm-service node discovery completed with errors", "error", err)
+		}
+		startNodeRegistryRefreshLoop(reg)
 		provider = registry.NewPool(reg, func(url string) model.Provider {
 			return llama.New(url)
 		})
@@ -134,4 +138,23 @@ func connectWithRetry(dsn string, attempts int, delay time.Duration) (*sql.DB, e
 		time.Sleep(delay)
 	}
 	return nil, fmt.Errorf("could not connect after %d attempts: %w", attempts, err)
+}
+
+func refreshNodeRegistry(ctx context.Context, reg *registry.Registry) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	client := &http.Client{Timeout: 5 * time.Second}
+	return reg.RefreshFromNodes(ctx, client)
+}
+
+func startNodeRegistryRefreshLoop(reg *registry.Registry) {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := refreshNodeRegistry(context.Background(), reg); err != nil {
+				slog.Warn("llm-service node refresh completed with errors", "error", err)
+			}
+		}
+	}()
 }

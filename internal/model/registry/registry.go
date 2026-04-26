@@ -96,9 +96,37 @@ func (r *Registry) MarkHealthy(url string) {
 		if n.config.URL == url {
 			n.healthy = true
 			n.failures = 0
+			n.lastFailure = time.Time{}
 			return
 		}
 	}
+}
+
+// UpdateNode refreshes the stored configuration and health state for the node
+// identified by cfg.URL. When healthy is false because capability discovery
+// says the node is not ready, lastFailure is intentionally cleared so the node
+// is only re-enabled by the next explicit refresh rather than cooldown alone.
+func (r *Registry) UpdateNode(cfg NodeConfig, healthy bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, n := range r.nodes {
+		if n.config.URL != cfg.URL {
+			continue
+		}
+		n.config = cfg
+		n.healthy = healthy
+		if healthy {
+			n.failures = 0
+			n.lastFailure = time.Time{}
+		} else if n.failures == 0 {
+			n.lastFailure = time.Time{}
+		}
+		return
+	}
+	r.nodes = append(r.nodes, &nodeState{
+		config:  cfg,
+		healthy: healthy,
+	})
 }
 
 // Nodes returns a snapshot of all registered node configurations, regardless

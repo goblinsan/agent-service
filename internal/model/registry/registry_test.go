@@ -3,6 +3,8 @@ package registry_test
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/goblinsan/agent-service/internal/model"
@@ -90,6 +92,52 @@ func TestRegistry_Nodes(t *testing.T) {
 	require.Len(t, nodes, 2)
 	assert.Equal(t, cfgs[0], nodes[0])
 	assert.Equal(t, cfgs[1], nodes[1])
+}
+
+func TestRegistry_RefreshFromNodesUpdatesModelInventory(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/node", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","loaded_model":"llama3.2.gguf"}`))
+	}))
+	defer srv.Close()
+
+	reg := registry.New([]registry.NodeConfig{{Name: "n1", URL: srv.URL}})
+
+	err := reg.RefreshFromNodes(context.Background(), srv.Client())
+	require.NoError(t, err)
+
+	node := reg.Pick("llama3.2.gguf")
+	require.NotNil(t, node)
+	assert.Equal(t, []string{"llama3.2.gguf"}, node.Models)
+	assert.Nil(t, reg.Pick("mistral.gguf"))
+}
+
+func TestRegistry_RefreshFromNodesMarksNodeUnavailableWhenNoModelLoaded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"no-model","loaded_model":""}`))
+	}))
+	defer srv.Close()
+
+	reg := registry.New([]registry.NodeConfig{{Name: "n1", URL: srv.URL}})
+
+	err := reg.RefreshFromNodes(context.Background(), srv.Client())
+	require.NoError(t, err)
+	assert.Nil(t, reg.Pick(""))
+}
+
+func TestRegistry_RefreshFromNodesMarksNodeUnavailableOnProbeFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusBadGateway)
+	}))
+	defer srv.Close()
+
+	reg := registry.New([]registry.NodeConfig{{Name: "n1", URL: srv.URL}})
+
+	err := reg.RefreshFromNodes(context.Background(), srv.Client())
+	require.Error(t, err)
+	assert.Nil(t, reg.Pick(""))
 }
 
 // ── Pool tests ────────────────────────────────────────────────────────────────
