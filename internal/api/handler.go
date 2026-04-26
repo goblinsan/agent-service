@@ -332,8 +332,8 @@ func internalAutomationHandler(svc *service.Service, m *metrics.Metrics) http.Ha
 			http.Error(w, `{"error":"job_type is required"}`, http.StatusBadRequest)
 			return
 		}
-		if req.Prompt == "" {
-			http.Error(w, `{"error":"prompt is required"}`, http.StatusBadRequest)
+		if req.Prompt == "" && len(req.Messages) == 0 {
+			http.Error(w, `{"error":"prompt or messages is required"}`, http.StatusBadRequest)
 			return
 		}
 

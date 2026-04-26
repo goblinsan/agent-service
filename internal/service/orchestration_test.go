@@ -14,6 +14,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type usageProvider struct{}
+
+func (p *usageProvider) Complete(_ context.Context, _ model.Request) (*model.Response, error) {
+	return &model.Response{
+		Content:      "usage-aware response",
+		FinishReason: "stop",
+		Usage: model.Usage{
+			PromptTokens:     14,
+			CompletionTokens: 6,
+			TotalTokens:      20,
+		},
+	}, nil
+}
+
+func (p *usageProvider) Stream(_ context.Context, _ model.Request, onChunk func(string) error) error {
+	return onChunk("usage-aware response")
+}
+
 // ---------------------------------------------------------------------------
 // StartChatRun
 // ---------------------------------------------------------------------------
@@ -283,6 +301,49 @@ func TestStartAutomationRun_SyncMode_ModelBackendInResult(t *testing.T) {
 	var result service.AutomationRunResult
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&result))
 	assert.Equal(t, "llama3", result.ModelBackend)
+}
+
+func TestStartAutomationRun_SyncMode_PersistsAutomationIdentityAndReturnsUsage(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &usageProvider{}, 10)
+
+	req := &service.AutomationRunRequest{
+		RequestID:    "req-auto-1",
+		Source:       "kulrs",
+		JobType:      "palette_analysis",
+		WorkflowID:   "wf-auto-1",
+		ThreadID:     "thread-auto-1",
+		UserID:       "user-auto-1",
+		AgentID:      "agent-auto-1",
+		SystemPrompt: "Be concise.",
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "Summarize the product palette."},
+		},
+		ResponseMode: "sync",
+	}
+
+	rr := httptest.NewRecorder()
+	require.NoError(t, svc.StartAutomationRun(context.Background(), req, rr))
+
+	var result service.AutomationRunResult
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&result))
+	assert.Equal(t, "completed", result.Status)
+	require.NotNil(t, result.Usage)
+	assert.Equal(t, 20, result.Usage.TotalTokens)
+
+	var run *store.Run
+	for _, r := range ms.runs {
+		run = r
+		break
+	}
+	require.NotNil(t, run)
+	assert.Equal(t, "req-auto-1", run.RequestID)
+	assert.Equal(t, "thread-auto-1", run.ThreadID)
+	assert.Equal(t, "thread-auto-1", run.SessionID)
+	assert.Equal(t, "user-auto-1", run.UserID)
+	assert.Equal(t, "agent-auto-1", run.AgentID)
+	assert.Equal(t, "wf-auto-1", run.WorkflowID)
+	assert.Equal(t, "palette_analysis", run.JobType)
 }
 
 // ---------------------------------------------------------------------------

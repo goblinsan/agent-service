@@ -191,6 +191,35 @@ func TestInternalAutomationHandler_DefaultSyncMode(t *testing.T) {
 	assert.NotEmpty(t, result["run_id"])
 }
 
+func TestInternalAutomationHandler_AcceptsMessagesWithoutPrompt(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+	router := api.NewRouter(svc)
+
+	body := map[string]any{
+		"source":    "kulrs",
+		"job_type":  "palette_analysis",
+		"agent_id":  "palette-agent",
+		"user_id":   "me",
+		"thread_id": "thread-automation-1",
+		"messages": []map[string]string{
+			{"role": "system", "content": "You are a color analyst."},
+			{"role": "user", "content": "Analyze these swatches."},
+		},
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/internal/automation", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	router.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	var result map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&result))
+	assert.Equal(t, "completed", result["status"])
+}
+
 func TestInternalAutomationHandler_WithModelPreferences(t *testing.T) {
 	ms := newMockStore()
 	svc := service.New(ms, &mockProvider{}, 10)
@@ -246,7 +275,7 @@ func TestInternalAutomationHandler_MissingJobType(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
-func TestInternalAutomationHandler_MissingPrompt(t *testing.T) {
+func TestInternalAutomationHandler_MissingPromptOrMessages(t *testing.T) {
 	ms := newMockStore()
 	svc := service.New(ms, &mockProvider{}, 10)
 	router := api.NewRouter(svc)
@@ -259,6 +288,7 @@ func TestInternalAutomationHandler_MissingPrompt(t *testing.T) {
 	router.ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Contains(t, rr.Body.String(), "prompt or messages is required")
 }
 
 func TestInternalAutomationHandler_InvalidJSON(t *testing.T) {
@@ -321,9 +351,13 @@ func TestInternalAutomationRun_StoresContext(t *testing.T) {
 	router := api.NewRouter(svc)
 
 	body := map[string]any{
+		"request_id":  "req-automation-1",
 		"source":      "kulrs",
 		"job_type":    "ingest",
 		"workflow_id": "wf-xyz",
+		"thread_id":   "thread-auto-9",
+		"user_id":     "user-auto-9",
+		"agent_id":    "agent-auto-9",
 		"prompt":      "process the batch",
 	}
 	raw, _ := json.Marshal(body)
@@ -341,8 +375,12 @@ func TestInternalAutomationRun_StoresContext(t *testing.T) {
 	}
 	require.NotNil(t, run)
 	assert.Equal(t, "automation", run.Source)
+	assert.Equal(t, "req-automation-1", run.RequestID)
 	assert.Equal(t, "ingest", run.JobType)
 	assert.Equal(t, "wf-xyz", run.WorkflowID)
+	assert.Equal(t, "thread-auto-9", run.ThreadID)
+	assert.Equal(t, "user-auto-9", run.UserID)
+	assert.Equal(t, "agent-auto-9", run.AgentID)
 }
 
 // ---------------------------------------------------------------------------
@@ -355,8 +393,8 @@ func TestKulrsPaletteHandler_ValidRequest(t *testing.T) {
 	router := api.NewRouter(svc)
 
 	body := map[string]any{
-		"product_id": "prod-123",
-		"image_urls": []string{"https://cdn.example.com/a.jpg", "https://cdn.example.com/b.jpg"},
+		"product_id":  "prod-123",
+		"image_urls":  []string{"https://cdn.example.com/a.jpg", "https://cdn.example.com/b.jpg"},
 		"workflow_id": "wf-palette-1",
 	}
 	raw, _ := json.Marshal(body)

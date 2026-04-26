@@ -65,19 +65,32 @@ type ChatRunRequest struct {
 // non-chat callers such as scheduled jobs, background workers, and workflow
 // engines.
 type AutomationRunRequest struct {
+	// RequestID is the caller-assigned correlation ID for this automation run.
+	RequestID string `json:"request_id,omitempty"`
 	// Source identifies the automation system (e.g. "scheduler", "kulrs").
 	Source string `json:"source"`
 	// JobType classifies the kind of work (e.g. "report", "summarise").
 	JobType string `json:"job_type"`
 	// WorkflowID links the run to a parent workflow, if applicable.
 	WorkflowID string `json:"workflow_id,omitempty"`
+	// ThreadID optionally associates the automation run with a durable thread or
+	// inbox conversation owned by the caller.
+	ThreadID string `json:"thread_id,omitempty"`
+	// UserID identifies the end user or automation owner, when applicable.
+	UserID string `json:"user_id,omitempty"`
+	// AgentID identifies the logical assistant handling this automation run.
+	AgentID string `json:"agent_id,omitempty"`
 	// Prompt is the primary instruction for the agent.
 	Prompt string `json:"prompt,omitempty"`
 	// Messages, when provided, carry the full normalized conversation/history for
 	// the automation run and take precedence over Prompt+Context prompt building.
 	Messages []model.Message `json:"messages,omitempty"`
+	// SystemPrompt is an optional automation-specific system instruction.
+	SystemPrompt string `json:"system_prompt,omitempty"`
 	// Context is a free-form map of additional data passed as context.
 	Context map[string]any `json:"context,omitempty"`
+	// ToolPolicy overrides the default tool access rules for this request.
+	ToolPolicy *ToolPolicySpec `json:"tool_policy,omitempty"`
 	// ModelPreferences expresses the caller's model-selection preferences.
 	ModelPreferences *ModelPreferences `json:"model_preferences,omitempty"`
 	// ResponseMode controls whether the response is streamed ("stream") or
@@ -89,19 +102,23 @@ type AutomationRunRequest struct {
 
 // AutomationRunResult is the response body for sync-mode automation runs.
 type AutomationRunResult struct {
-	RunID              string              `json:"run_id"`
-	Status             string              `json:"status"`
-	Output             string              `json:"output,omitempty"`
-	ModelBackend       string              `json:"model_backend,omitempty"`
-	ToolCalls          []store.RunToolCall `json:"tool_calls,omitempty"`
-	OrchestrationState *OrchestrationState `json:"orchestration_state,omitempty"`
+	RunID              string                    `json:"run_id"`
+	Status             string                    `json:"status"`
+	Output             string                    `json:"output,omitempty"`
+	ModelBackend       string                    `json:"model_backend,omitempty"`
+	ToolCalls          []store.RunToolCall       `json:"tool_calls,omitempty"`
+	ApprovalRecords    []store.RunApprovalRecord `json:"approval_records,omitempty"`
+	Usage              *model.Usage              `json:"usage,omitempty"`
+	OrchestrationState *OrchestrationState       `json:"orchestration_state,omitempty"`
 }
 
 type OrchestrationState struct {
-	RunID             string   `json:"runId,omitempty"`
-	CheckpointID      string   `json:"checkpointId,omitempty"`
-	Reason            string   `json:"reason,omitempty"`
-	RequiredApprovers []string `json:"requiredApprovers,omitempty"`
+	RunID             string         `json:"runId,omitempty"`
+	CheckpointID      string         `json:"checkpointId,omitempty"`
+	Reason            string         `json:"reason,omitempty"`
+	RequiredApprovers []string       `json:"requiredApprovers,omitempty"`
+	ToolName          string         `json:"toolName,omitempty"`
+	ToolParams        map[string]any `json:"toolParams,omitempty"`
 }
 
 // GatewayRunRequest is the sync JSON contract currently used by the
@@ -348,10 +365,15 @@ func (s *Service) StartAutomationRun(ctx context.Context, req *AutomationRunRequ
 	initialMessages := buildAutomationMessages(req)
 	run := &store.Run{
 		ID:           newID(),
+		SessionID:    req.ThreadID,
 		Source:       string(store.RunSourceAutomation),
 		Prompt:       derivePrompt(initialMessages, req.Prompt),
 		Status:       "created",
 		ModelBackend: modelBackend,
+		RequestID:    req.RequestID,
+		ThreadID:     req.ThreadID,
+		UserID:       req.UserID,
+		AgentID:      req.AgentID,
 		WorkflowID:   req.WorkflowID,
 		JobType:      req.JobType,
 		CreatedAt:    time.Now().UTC(),
@@ -362,13 +384,13 @@ func (s *Service) StartAutomationRun(ctx context.Context, req *AutomationRunRequ
 	}
 
 	if req.ResponseMode == "stream" {
-		return s.streamAutomationRun(ctx, run, w, initialMessages)
+		return s.streamAutomationRun(ctx, run, w, initialMessages, buildRunPolicy(req.ToolPolicy))
 	}
-	return s.syncAutomationRun(ctx, run, w, initialMessages)
+	return s.syncAutomationRun(ctx, run, w, initialMessages, buildRunPolicy(req.ToolPolicy))
 }
 
 // streamAutomationRun runs an automation request and emits SSE events to w.
-func (s *Service) streamAutomationRun(ctx context.Context, run *store.Run, w http.ResponseWriter, initialMessages []model.Message) error {
+func (s *Service) streamAutomationRun(ctx context.Context, run *store.Run, w http.ResponseWriter, initialMessages []model.Message, runPolicy policy.Policy) error {
 	if err := sse.Write(w, sse.Event{Type: sse.EventRunCreated, Data: run}); err != nil {
 		return err
 	}
@@ -393,12 +415,16 @@ func (s *Service) streamAutomationRun(ctx context.Context, run *store.Run, w htt
 
 	slog.Info("automation run started",
 		"run_id", run.ID,
+		"request_id", run.RequestID,
+		"thread_id", run.ThreadID,
+		"user_id", run.UserID,
+		"agent_id", run.AgentID,
 		"workflow_id", run.WorkflowID,
 		"job_type", run.JobType,
 		"model_backend", run.ModelBackend,
 	)
 	observer := newObservedRunWriter(w)
-	done := s.startManagedRun(run, observer, nil, initialMessages)
+	done := s.startManagedRun(run, observer, runPolicy, initialMessages)
 	paused, err := s.waitForRunOutcome(ctx, run, observer, done)
 	if paused != nil {
 		return nil
@@ -408,7 +434,7 @@ func (s *Service) streamAutomationRun(ctx context.Context, run *store.Run, w htt
 
 // syncAutomationRun runs an automation request to completion and writes the
 // result as a single JSON response.
-func (s *Service) syncAutomationRun(ctx context.Context, run *store.Run, w http.ResponseWriter, initialMessages []model.Message) error {
+func (s *Service) syncAutomationRun(ctx context.Context, run *store.Run, w http.ResponseWriter, initialMessages []model.Message, runPolicy policy.Policy) error {
 	run.Status = "in_progress"
 	run.UpdatedAt = time.Now().UTC()
 	if err := s.store.UpdateRun(ctx, run); err != nil {
@@ -417,23 +443,32 @@ func (s *Service) syncAutomationRun(ctx context.Context, run *store.Run, w http.
 
 	slog.Info("automation run started",
 		"run_id", run.ID,
+		"request_id", run.RequestID,
+		"thread_id", run.ThreadID,
+		"user_id", run.UserID,
+		"agent_id", run.AgentID,
 		"workflow_id", run.WorkflowID,
 		"job_type", run.JobType,
 		"model_backend", run.ModelBackend,
 	)
 	observer := newObservedRunWriter(nil)
-	done := s.startManagedRun(run, observer, nil, initialMessages)
+	done := s.startManagedRun(run, observer, runPolicy, initialMessages)
 	paused, err := s.waitForRunOutcome(ctx, run, observer, done)
 	if err != nil {
 		return err
 	}
 
 	resp := AutomationRunResult{
-		RunID:        run.ID,
-		Status:       "completed",
-		Output:       run.Response,
-		ModelBackend: run.ModelBackend,
-		ToolCalls:    run.ToolCalls,
+		RunID:           run.ID,
+		Status:          "completed",
+		Output:          run.Response,
+		ModelBackend:    run.ModelBackend,
+		ToolCalls:       run.ToolCalls,
+		ApprovalRecords: run.ApprovalRecs,
+	}
+	if run.Usage.TotalTokens > 0 || run.Usage.PromptTokens > 0 || run.Usage.CompletionTokens > 0 {
+		usageCopy := run.Usage
+		resp.Usage = &usageCopy
 	}
 	if paused != nil {
 		resp.Status = "approval_required"
@@ -455,6 +490,8 @@ type runSignal struct {
 	kind       runSignalKind
 	approvalID string
 	reason     string
+	toolName   string
+	toolParams map[string]any
 }
 
 type observedRunWriter struct {
@@ -512,6 +549,8 @@ func (w *observedRunWriter) ObserveEvent(event sse.Event) {
 		if w.latestApproval != nil {
 			signal.approvalID = w.latestApproval.ApprovalID
 			signal.reason = w.latestApproval.Reason
+			signal.toolName = w.latestApproval.ToolName
+			signal.toolParams = w.latestApproval.Params
 		}
 		w.emitSignal(signal)
 	case sse.EventRunCompleted:
@@ -569,7 +608,7 @@ func (s *Service) waitForRunOutcome(ctx context.Context, run *store.Run, writer 
 			if signal.kind != runSignalPaused {
 				continue
 			}
-			run.PausedState = buildPausedState(signal.approvalID, signal.reason)
+			run.PausedState = buildPausedState(signal.approvalID, signal.reason, signal.toolName, signal.toolParams)
 			run.UpdatedAt = time.Now().UTC()
 			_ = s.store.UpdateRun(context.Background(), run)
 			writer.DisableForwarding()
@@ -577,6 +616,8 @@ func (s *Service) waitForRunOutcome(ctx context.Context, run *store.Run, writer 
 				RunID:        run.ID,
 				CheckpointID: signal.approvalID,
 				Reason:       firstNonEmpty(signal.reason, "Awaiting approval"),
+				ToolName:     signal.toolName,
+				ToolParams:   signal.toolParams,
 			}, nil
 		case err := <-done:
 			return nil, err
@@ -587,11 +628,13 @@ func (s *Service) waitForRunOutcome(ctx context.Context, run *store.Run, writer 
 	}
 }
 
-func buildPausedState(approvalID, reason string) string {
-	state := map[string]string{
+func buildPausedState(approvalID, reason, toolName string, toolParams map[string]any) string {
+	state := map[string]any{
 		"type":        "approval_required",
 		"approval_id": approvalID,
 		"reason":      reason,
+		"tool_name":   toolName,
+		"tool_params": toolParams,
 	}
 	raw, err := json.Marshal(state)
 	if err != nil {
@@ -671,8 +714,37 @@ func buildChatMessages(req *ChatRunRequest) []model.Message {
 }
 
 func buildAutomationMessages(req *AutomationRunRequest) []model.Message {
+	var messages []model.Message
+	if req.SystemPrompt != "" {
+		messages = append(messages, model.Message{Role: model.RoleSystem, Content: req.SystemPrompt})
+	}
+	var automationContext []string
+	if req.Source != "" {
+		automationContext = append(automationContext, fmt.Sprintf("Automation source: %s", req.Source))
+	}
+	if req.JobType != "" {
+		automationContext = append(automationContext, fmt.Sprintf("Job type: %s", req.JobType))
+	}
+	if req.WorkflowID != "" {
+		automationContext = append(automationContext, fmt.Sprintf("Workflow ID: %s", req.WorkflowID))
+	}
+	if req.RequestID != "" {
+		automationContext = append(automationContext, fmt.Sprintf("Request ID: %s", req.RequestID))
+	}
+	if req.AgentID != "" {
+		automationContext = append(automationContext, fmt.Sprintf("Agent ID: %s", req.AgentID))
+	}
+	if req.ThreadID != "" {
+		automationContext = append(automationContext, fmt.Sprintf("Thread ID: %s", req.ThreadID))
+	}
+	if req.UserID != "" {
+		automationContext = append(automationContext, fmt.Sprintf("User ID: %s", req.UserID))
+	}
+	if len(automationContext) > 0 {
+		messages = append(messages, model.Message{Role: model.RoleSystem, Content: strings.Join(automationContext, "\n")})
+	}
 	if len(req.Messages) > 0 {
-		return append([]model.Message(nil), req.Messages...)
+		return append(messages, req.Messages...)
 	}
 	userContent := req.Prompt
 	if len(req.Context) > 0 {
@@ -684,11 +756,6 @@ func buildAutomationMessages(req *AutomationRunRequest) []model.Message {
 		if raw, err := json.Marshal(req.Metadata); err == nil {
 			userContent = fmt.Sprintf("%s\n\nMetadata JSON:\n%s", userContent, string(raw))
 		}
-	}
-	var messages []model.Message
-	if req.Source != "" || req.JobType != "" || req.WorkflowID != "" {
-		systemContent := fmt.Sprintf("Automation source: %s\nJob type: %s\nWorkflow ID: %s", req.Source, req.JobType, req.WorkflowID)
-		messages = append(messages, model.Message{Role: model.RoleSystem, Content: strings.TrimSpace(systemContent)})
 	}
 	return append(messages, model.Message{Role: model.RoleUser, Content: strings.TrimSpace(userContent)})
 }

@@ -22,6 +22,14 @@ type NodeConfig struct {
 	// Models is the set of model names served by this node.
 	// An empty slice means the node can serve any model.
 	Models []string
+	// MaxConcurrentRequests is the node's advertised inference concurrency cap.
+	MaxConcurrentRequests int
+	// ActiveRequests is the most recently observed in-flight inference count.
+	ActiveRequests int
+	// MaxTokens is the node's advertised per-request max_tokens cap.
+	MaxTokens int
+	// CtxSize is the node's configured context window.
+	CtxSize int
 }
 
 // nodeState couples a NodeConfig with transient health-tracking data.
@@ -56,6 +64,10 @@ func (r *Registry) Pick(model string) *NodeConfig {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
+	var best *nodeState
+	bestAvailable := false
+	bestLoad := 2.0
+	bestActive := 0
 	for _, n := range r.nodes {
 		if !n.healthy {
 			if !n.lastFailure.IsZero() && now.Sub(n.lastFailure) >= nodeRetryCooldown {
@@ -64,10 +76,23 @@ func (r *Registry) Pick(model string) *NodeConfig {
 				continue
 			}
 		}
-		if supportsModel(n.config.Models, model) {
-			c := n.config
-			return &c
+		if !supportsModel(n.config.Models, model) {
+			continue
 		}
+		available := nodeHasCapacity(n.config)
+		load := nodeLoad(n.config)
+		if best == nil ||
+			(available && !bestAvailable) ||
+			(available == bestAvailable && (load < bestLoad || (load == bestLoad && n.config.ActiveRequests < bestActive))) {
+			best = n
+			bestAvailable = available
+			bestLoad = load
+			bestActive = n.config.ActiveRequests
+		}
+	}
+	if best != nil {
+		c := best.config
+		return &c
 	}
 	return nil
 }
@@ -153,4 +178,15 @@ func supportsModel(models []string, requested string) bool {
 		}
 	}
 	return false
+}
+
+func nodeHasCapacity(cfg NodeConfig) bool {
+	return cfg.MaxConcurrentRequests <= 0 || cfg.ActiveRequests < cfg.MaxConcurrentRequests
+}
+
+func nodeLoad(cfg NodeConfig) float64 {
+	if cfg.MaxConcurrentRequests > 0 {
+		return float64(cfg.ActiveRequests) / float64(cfg.MaxConcurrentRequests)
+	}
+	return float64(cfg.ActiveRequests)
 }

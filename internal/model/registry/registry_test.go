@@ -82,6 +82,28 @@ func TestRegistry_PickAnyModelWhenNodeHasNoModels(t *testing.T) {
 	assert.NotNil(t, reg.Pick(""))
 }
 
+func TestRegistry_PickPrefersLowerLoadHealthyNode(t *testing.T) {
+	reg := registry.New([]registry.NodeConfig{
+		{Name: "n1", URL: "http://n1", Models: []string{"llama3"}, MaxConcurrentRequests: 4, ActiveRequests: 3},
+		{Name: "n2", URL: "http://n2", Models: []string{"llama3"}, MaxConcurrentRequests: 4, ActiveRequests: 1},
+	})
+
+	node := reg.Pick("llama3")
+	require.NotNil(t, node)
+	assert.Equal(t, "http://n2", node.URL)
+}
+
+func TestRegistry_PickPrefersAvailableCapacityOverSaturatedNode(t *testing.T) {
+	reg := registry.New([]registry.NodeConfig{
+		{Name: "n1", URL: "http://n1", Models: []string{"llama3"}, MaxConcurrentRequests: 1, ActiveRequests: 1},
+		{Name: "n2", URL: "http://n2", Models: []string{"llama3"}, MaxConcurrentRequests: 2, ActiveRequests: 1},
+	})
+
+	node := reg.Pick("llama3")
+	require.NotNil(t, node)
+	assert.Equal(t, "http://n2", node.URL)
+}
+
 func TestRegistry_Nodes(t *testing.T) {
 	cfgs := []registry.NodeConfig{
 		{Name: "a", URL: "http://a"},
@@ -96,9 +118,15 @@ func TestRegistry_Nodes(t *testing.T) {
 
 func TestRegistry_RefreshFromNodesUpdatesModelInventory(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/node", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok","loaded_model":"llama3.2.gguf"}`))
+		switch r.URL.Path {
+		case "/api/node":
+			_, _ = w.Write([]byte(`{"status":"ok","loaded_model":"llama3.2.gguf","max_concurrent_requests":3,"max_tokens":2048,"ctx_size":8192}`))
+		case "/api/metrics":
+			_, _ = w.Write([]byte(`{"active_requests":1}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
 	}))
 	defer srv.Close()
 
@@ -110,13 +138,22 @@ func TestRegistry_RefreshFromNodesUpdatesModelInventory(t *testing.T) {
 	node := reg.Pick("llama3.2.gguf")
 	require.NotNil(t, node)
 	assert.Equal(t, []string{"llama3.2.gguf"}, node.Models)
+	assert.Equal(t, 3, node.MaxConcurrentRequests)
+	assert.Equal(t, 1, node.ActiveRequests)
 	assert.Nil(t, reg.Pick("mistral.gguf"))
 }
 
 func TestRegistry_RefreshFromNodesMarksNodeUnavailableWhenNoModelLoaded(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"no-model","loaded_model":""}`))
+		switch r.URL.Path {
+		case "/api/node":
+			_, _ = w.Write([]byte(`{"status":"no-model","loaded_model":"","max_concurrent_requests":1,"max_tokens":2048,"ctx_size":4096}`))
+		case "/api/metrics":
+			_, _ = w.Write([]byte(`{"active_requests":0}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
 	}))
 	defer srv.Close()
 
@@ -129,7 +166,12 @@ func TestRegistry_RefreshFromNodesMarksNodeUnavailableWhenNoModelLoaded(t *testi
 
 func TestRegistry_RefreshFromNodesMarksNodeUnavailableOnProbeFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "boom", http.StatusBadGateway)
+		if r.URL.Path == "/api/node" {
+			http.Error(w, "boom", http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"active_requests":0}`))
 	}))
 	defer srv.Close()
 
@@ -138,6 +180,26 @@ func TestRegistry_RefreshFromNodesMarksNodeUnavailableOnProbeFailure(t *testing.
 	err := reg.RefreshFromNodes(context.Background(), srv.Client())
 	require.Error(t, err)
 	assert.Nil(t, reg.Pick(""))
+}
+
+func TestRegistry_RefreshFromNodesKeepsHealthyNodeWhenMetricsUnavailable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/node" {
+			_, _ = w.Write([]byte(`{"status":"ok","loaded_model":"llama3.3.gguf","max_concurrent_requests":2,"max_tokens":2048,"ctx_size":4096}`))
+			return
+		}
+		http.Error(w, "metrics unavailable", http.StatusBadGateway)
+	}))
+	defer srv.Close()
+
+	reg := registry.New([]registry.NodeConfig{{Name: "n1", URL: srv.URL}})
+
+	err := reg.RefreshFromNodes(context.Background(), srv.Client())
+	require.Error(t, err)
+	node := reg.Pick("llama3.3.gguf")
+	require.NotNil(t, node)
+	assert.Equal(t, 0, node.ActiveRequests)
 }
 
 // ── Pool tests ────────────────────────────────────────────────────────────────
