@@ -65,6 +65,9 @@ type Run struct {
 	PausedState string
 	// Usage stores aggregate token accounting across all model calls in the run.
 	Usage model.Usage
+	// StructuredOutput stores parsed automation output when the caller requested
+	// a structured sync response (for example, Kulrs palette analysis JSON).
+	StructuredOutput any
 
 	// Chat-context fields (populated when Source == "chat").
 	RequestID string

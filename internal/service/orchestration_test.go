@@ -396,6 +396,16 @@ func TestStartAutomationRun_SyncMode_ReturnsStructuredOutput(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "Voltage Mirage", structured["name"])
 	assert.NotNil(t, structured["colors"])
+
+	var run *store.Run
+	for _, r := range ms.runs {
+		run = r
+		break
+	}
+	require.NotNil(t, run)
+	storedStructured, ok := run.StructuredOutput.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "Voltage Mirage", storedStructured["name"])
 }
 
 // ---------------------------------------------------------------------------

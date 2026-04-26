@@ -59,6 +59,10 @@ func (p *Postgres) CreateRun(ctx context.Context, r *Run) error {
 	if err != nil {
 		return err
 	}
+	structuredOutputJSON, err := marshalStructuredOutput(r.StructuredOutput)
+	if err != nil {
+		return err
+	}
 
 	var sessionID *string
 	if r.SessionID != "" {
@@ -68,21 +72,21 @@ func (p *Postgres) CreateRun(ctx context.Context, r *Run) error {
 	_, err = p.db.ExecContext(ctx,
 		`INSERT INTO runs (
 			id, session_id, source, prompt, status, response,
-			model_backend, tool_calls, approval_records, paused_state,
+			model_backend, tool_calls, approval_records, paused_state, structured_output,
 			prompt_tokens, completion_tokens, total_tokens,
 			request_id, thread_id, user_id, agent_id,
 			workflow_id, job_type,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10,
-			$11, $12, $13,
-			$14, $15, $16, $17,
-			$18, $19,
-			$20, $21
+			$7, $8, $9, $10, $11,
+			$12, $13, $14,
+			$15, $16, $17, $18,
+			$19, $20,
+			$21, $22
 		)`,
 		r.ID, sessionID, r.Source, r.Prompt, r.Status, r.Response,
-		r.ModelBackend, string(toolCallsJSON), string(approvalRecsJSON), nullableString(r.PausedState),
+		r.ModelBackend, string(toolCallsJSON), string(approvalRecsJSON), nullableString(r.PausedState), structuredOutputJSON,
 		nullableInt(r.Usage.PromptTokens), nullableInt(r.Usage.CompletionTokens), nullableInt(r.Usage.TotalTokens),
 		nullableString(r.RequestID), nullableString(r.ThreadID), nullableString(r.UserID), nullableString(r.AgentID),
 		nullableString(r.WorkflowID), nullableString(r.JobType),
@@ -96,11 +100,12 @@ func (p *Postgres) GetRun(ctx context.Context, id string) (*Run, error) {
 	var sessionID sql.NullString
 	var toolCallsJSON, approvalRecsJSON string
 	var modelBackend, pausedState, requestID, threadID, userID, agentID, workflowID, jobType sql.NullString
+	var structuredOutputJSON sql.NullString
 	var promptTokens, completionTokens, totalTokens sql.NullInt64
 
 	err := p.db.QueryRowContext(ctx,
 		`SELECT id, session_id, source, prompt, status, response,
-			model_backend, tool_calls, approval_records, paused_state,
+			model_backend, tool_calls, approval_records, paused_state, structured_output,
 			prompt_tokens, completion_tokens, total_tokens,
 			request_id, thread_id, user_id, agent_id,
 			workflow_id, job_type,
@@ -108,7 +113,7 @@ func (p *Postgres) GetRun(ctx context.Context, id string) (*Run, error) {
 		FROM runs WHERE id = $1`, id,
 	).Scan(
 		&r.ID, &sessionID, &r.Source, &r.Prompt, &r.Status, &r.Response,
-		&modelBackend, &toolCallsJSON, &approvalRecsJSON, &pausedState,
+		&modelBackend, &toolCallsJSON, &approvalRecsJSON, &pausedState, &structuredOutputJSON,
 		&promptTokens, &completionTokens, &totalTokens,
 		&requestID, &threadID, &userID, &agentID,
 		&workflowID, &jobType,
@@ -144,6 +149,11 @@ func (p *Postgres) GetRun(ctx context.Context, id string) (*Run, error) {
 			return nil, err
 		}
 	}
+	if structuredOutputJSON.Valid && structuredOutputJSON.String != "" {
+		if err := json.Unmarshal([]byte(structuredOutputJSON.String), &r.StructuredOutput); err != nil {
+			return nil, err
+		}
+	}
 
 	return r, nil
 }
@@ -167,15 +177,19 @@ func (p *Postgres) UpdateRun(ctx context.Context, r *Run) error {
 	if err != nil {
 		return err
 	}
+	structuredOutputJSON, err := marshalStructuredOutput(r.StructuredOutput)
+	if err != nil {
+		return err
+	}
 
 	res, err := p.db.ExecContext(ctx,
 		`UPDATE runs SET
 			status = $1, response = $2, updated_at = $3,
-			model_backend = $4, tool_calls = $5, approval_records = $6, paused_state = $7,
-			prompt_tokens = $8, completion_tokens = $9, total_tokens = $10
-		WHERE id = $11`,
+			model_backend = $4, tool_calls = $5, approval_records = $6, paused_state = $7, structured_output = $8,
+			prompt_tokens = $9, completion_tokens = $10, total_tokens = $11
+		WHERE id = $12`,
 		r.Status, r.Response, r.UpdatedAt,
-		nullableString(r.ModelBackend), string(toolCallsJSON), string(approvalRecsJSON), nullableString(r.PausedState),
+		nullableString(r.ModelBackend), string(toolCallsJSON), string(approvalRecsJSON), nullableString(r.PausedState), structuredOutputJSON,
 		nullableInt(r.Usage.PromptTokens), nullableInt(r.Usage.CompletionTokens), nullableInt(r.Usage.TotalTokens),
 		r.ID,
 	)
@@ -229,4 +243,15 @@ func nullableString(s string) sql.NullString {
 
 func nullableInt(v int) sql.NullInt64 {
 	return sql.NullInt64{Int64: int64(v), Valid: v > 0}
+}
+
+func marshalStructuredOutput(value any) (sql.NullString, error) {
+	if value == nil {
+		return sql.NullString{}, nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return sql.NullString{}, err
+	}
+	return sql.NullString{String: string(raw), Valid: true}, nil
 }

@@ -166,6 +166,52 @@ func TestE2E_ChatRun_WithToolCall(t *testing.T) {
 	assert.Equal(t, "tool-output", run.ToolCalls[0].Result)
 }
 
+func TestE2E_GetRun_ExposesStructuredAutomationOutput(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &sequenceProvider{
+		responses: []model.Response{
+			{Content: `{"dominant_colors":["#112233"],"accent_colors":["#445566"],"description":"Calm evening palette."}`, FinishReason: "stop"},
+		},
+	}, 10)
+	router := api.NewRouter(svc)
+
+	body := map[string]any{
+		"source":        "kulrs",
+		"job_type":      "palette_analysis",
+		"prompt":        "Analyze this palette.",
+		"response_mode": "sync",
+		"result_format": map[string]any{
+			"type":          "json_object",
+			"required_keys": []string{"dominant_colors", "accent_colors", "description"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/internal/automation", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var automationResult map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&automationResult))
+	runID, _ := automationResult["run_id"].(string)
+	require.NotEmpty(t, runID)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/runs/"+runID, nil)
+	getRR := httptest.NewRecorder()
+	router.ServeHTTP(getRR, getReq)
+	require.Equal(t, http.StatusOK, getRR.Code)
+
+	var runResp map[string]any
+	require.NoError(t, json.NewDecoder(getRR.Body).Decode(&runResp))
+	structured, ok := runResp["StructuredOutput"].(map[string]any)
+	if !ok {
+		structured, ok = runResp["structured_output"].(map[string]any)
+	}
+	require.True(t, ok)
+	assert.Equal(t, "Calm evening palette.", structured["description"])
+}
+
 // ---------------------------------------------------------------------------
 // Issue #72 – Integration test: approval-required tool call
 // ---------------------------------------------------------------------------

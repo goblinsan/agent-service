@@ -490,6 +490,11 @@ func (s *Service) syncAutomationRun(ctx context.Context, run *store.Run, w http.
 	} else if structured, err := parseStructuredOutput(run.Response, resultFormat); err != nil {
 		return fmt.Errorf("parse structured automation output: %w", err)
 	} else if structured != nil {
+		run.StructuredOutput = structured
+		run.UpdatedAt = time.Now().UTC()
+		if err := s.store.UpdateRun(ctx, run); err != nil {
+			return fmt.Errorf("persist structured automation output: %w", err)
+		}
 		resp.StructuredOutput = structured
 	}
 	return json.NewEncoder(w).Encode(resp)
