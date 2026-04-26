@@ -83,6 +83,9 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 		if err != nil {
 			return fmt.Errorf("agent step %d: %w", i, err)
 		}
+		run.Usage.PromptTokens += resp.Usage.PromptTokens
+		run.Usage.CompletionTokens += resp.Usage.CompletionTokens
+		run.Usage.TotalTokens += resp.Usage.TotalTokens
 
 		step := &store.RunStep{
 			ID:        newID(),

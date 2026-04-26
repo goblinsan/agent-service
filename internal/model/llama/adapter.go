@@ -110,6 +110,11 @@ type chatResponse struct {
 		Message      llamaResponseMsg `json:"message"`
 		FinishReason string           `json:"finish_reason"`
 	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage"`
 }
 
 type streamChunk struct {
@@ -177,6 +182,11 @@ func (a *Adapter) Complete(ctx context.Context, req model.Request) (*model.Respo
 	modelResp := &model.Response{
 		Content:      content,
 		FinishReason: choice.FinishReason,
+		Usage: model.Usage{
+			PromptTokens:     cr.Usage.PromptTokens,
+			CompletionTokens: cr.Usage.CompletionTokens,
+			TotalTokens:      cr.Usage.TotalTokens,
+		},
 	}
 
 	// Convert any tool calls from the OpenAI wire format to model.ToolCall.

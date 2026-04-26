@@ -13,4 +13,4 @@ lint:
 	go vet ./...
 
 migrate:
-	psql "$(DATABASE_URL)" -f migrations/001_init.sql
+	for file in $$(ls migrations/*.sql | sort); do psql "$(DATABASE_URL)" -f $$file; done

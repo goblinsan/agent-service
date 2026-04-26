@@ -69,18 +69,21 @@ func (p *Postgres) CreateRun(ctx context.Context, r *Run) error {
 		`INSERT INTO runs (
 			id, session_id, source, prompt, status, response,
 			model_backend, tool_calls, approval_records, paused_state,
+			prompt_tokens, completion_tokens, total_tokens,
 			request_id, thread_id, user_id, agent_id,
 			workflow_id, job_type,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
 			$7, $8, $9, $10,
-			$11, $12, $13, $14,
-			$15, $16,
-			$17, $18
+			$11, $12, $13,
+			$14, $15, $16, $17,
+			$18, $19,
+			$20, $21
 		)`,
 		r.ID, sessionID, r.Source, r.Prompt, r.Status, r.Response,
 		r.ModelBackend, string(toolCallsJSON), string(approvalRecsJSON), nullableString(r.PausedState),
+		nullableInt(r.Usage.PromptTokens), nullableInt(r.Usage.CompletionTokens), nullableInt(r.Usage.TotalTokens),
 		nullableString(r.RequestID), nullableString(r.ThreadID), nullableString(r.UserID), nullableString(r.AgentID),
 		nullableString(r.WorkflowID), nullableString(r.JobType),
 		r.CreatedAt, r.UpdatedAt,
@@ -93,10 +96,12 @@ func (p *Postgres) GetRun(ctx context.Context, id string) (*Run, error) {
 	var sessionID sql.NullString
 	var toolCallsJSON, approvalRecsJSON string
 	var modelBackend, pausedState, requestID, threadID, userID, agentID, workflowID, jobType sql.NullString
+	var promptTokens, completionTokens, totalTokens sql.NullInt64
 
 	err := p.db.QueryRowContext(ctx,
 		`SELECT id, session_id, source, prompt, status, response,
 			model_backend, tool_calls, approval_records, paused_state,
+			prompt_tokens, completion_tokens, total_tokens,
 			request_id, thread_id, user_id, agent_id,
 			workflow_id, job_type,
 			created_at, updated_at
@@ -104,6 +109,7 @@ func (p *Postgres) GetRun(ctx context.Context, id string) (*Run, error) {
 	).Scan(
 		&r.ID, &sessionID, &r.Source, &r.Prompt, &r.Status, &r.Response,
 		&modelBackend, &toolCallsJSON, &approvalRecsJSON, &pausedState,
+		&promptTokens, &completionTokens, &totalTokens,
 		&requestID, &threadID, &userID, &agentID,
 		&workflowID, &jobType,
 		&r.CreatedAt, &r.UpdatedAt,
@@ -124,6 +130,9 @@ func (p *Postgres) GetRun(ctx context.Context, id string) (*Run, error) {
 	r.AgentID = agentID.String
 	r.WorkflowID = workflowID.String
 	r.JobType = jobType.String
+	r.Usage.PromptTokens = int(promptTokens.Int64)
+	r.Usage.CompletionTokens = int(completionTokens.Int64)
+	r.Usage.TotalTokens = int(totalTokens.Int64)
 
 	if toolCallsJSON != "" {
 		if err := json.Unmarshal([]byte(toolCallsJSON), &r.ToolCalls); err != nil {
@@ -162,10 +171,12 @@ func (p *Postgres) UpdateRun(ctx context.Context, r *Run) error {
 	res, err := p.db.ExecContext(ctx,
 		`UPDATE runs SET
 			status = $1, response = $2, updated_at = $3,
-			model_backend = $4, tool_calls = $5, approval_records = $6, paused_state = $7
-		WHERE id = $8`,
+			model_backend = $4, tool_calls = $5, approval_records = $6, paused_state = $7,
+			prompt_tokens = $8, completion_tokens = $9, total_tokens = $10
+		WHERE id = $11`,
 		r.Status, r.Response, r.UpdatedAt,
 		nullableString(r.ModelBackend), string(toolCallsJSON), string(approvalRecsJSON), nullableString(r.PausedState),
+		nullableInt(r.Usage.PromptTokens), nullableInt(r.Usage.CompletionTokens), nullableInt(r.Usage.TotalTokens),
 		r.ID,
 	)
 	if err != nil {
@@ -214,4 +225,8 @@ func (p *Postgres) ListSteps(ctx context.Context, runID string) ([]*RunStep, err
 // so that empty context IDs are stored as NULL rather than empty strings.
 func nullableString(s string) sql.NullString {
 	return sql.NullString{String: s, Valid: s != ""}
+}
+
+func nullableInt(v int) sql.NullInt64 {
+	return sql.NullInt64{Int64: int64(v), Valid: v > 0}
 }

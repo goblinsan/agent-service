@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"time"
+
+	"github.com/goblinsan/agent-service/internal/model"
 )
 
 // RunSource identifies the caller type that initiated a run.
@@ -61,6 +63,8 @@ type Run struct {
 	ApprovalRecs []RunApprovalRecord
 	// PausedState is an opaque JSON blob used to resume a paused run.
 	PausedState string
+	// Usage stores aggregate token accounting across all model calls in the run.
+	Usage model.Usage
 
 	// Chat-context fields (populated when Source == "chat").
 	RequestID string
