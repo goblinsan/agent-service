@@ -32,6 +32,32 @@ func (p *usageProvider) Stream(_ context.Context, _ model.Request, onChunk func(
 	return onChunk("usage-aware response")
 }
 
+type jsonProvider struct{}
+
+func (p *jsonProvider) Complete(_ context.Context, _ model.Request) (*model.Response, error) {
+	return &model.Response{
+		Content:      `{"name":"Voltage Mirage","description":"Electric dusk tones.","colors":["#112233","#445566","#778899"]}`,
+		FinishReason: "stop",
+	}, nil
+}
+
+func (p *jsonProvider) Stream(_ context.Context, _ model.Request, onChunk func(string) error) error {
+	return onChunk(`{"name":"Voltage Mirage","description":"Electric dusk tones.","colors":["#112233","#445566","#778899"]}`)
+}
+
+type kulrsAnalysisProvider struct{}
+
+func (p *kulrsAnalysisProvider) Complete(_ context.Context, _ model.Request) (*model.Response, error) {
+	return &model.Response{
+		Content:      `{"dominant_colors":["#112233","#223344"],"accent_colors":["#445566"],"description":"Moody blue-gold balance."}`,
+		FinishReason: "stop",
+	}, nil
+}
+
+func (p *kulrsAnalysisProvider) Stream(_ context.Context, _ model.Request, onChunk func(string) error) error {
+	return onChunk(`{"dominant_colors":["#112233","#223344"],"accent_colors":["#445566"],"description":"Moody blue-gold balance."}`)
+}
+
 // ---------------------------------------------------------------------------
 // StartChatRun
 // ---------------------------------------------------------------------------
@@ -346,13 +372,39 @@ func TestStartAutomationRun_SyncMode_PersistsAutomationIdentityAndReturnsUsage(t
 	assert.Equal(t, "palette_analysis", run.JobType)
 }
 
+func TestStartAutomationRun_SyncMode_ReturnsStructuredOutput(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &jsonProvider{}, 10)
+
+	req := &service.AutomationRunRequest{
+		Source:  "kulrs",
+		JobType: "palette_generation",
+		Prompt:  "Generate a palette.",
+		ResultFormat: &service.ResultFormatSpec{
+			Type:         "json_object",
+			RequiredKeys: []string{"name", "description", "colors"},
+		},
+		ResponseMode: "sync",
+	}
+
+	rr := httptest.NewRecorder()
+	require.NoError(t, svc.StartAutomationRun(context.Background(), req, rr))
+
+	var result service.AutomationRunResult
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&result))
+	structured, ok := result.StructuredOutput.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "Voltage Mirage", structured["name"])
+	assert.NotNil(t, structured["colors"])
+}
+
 // ---------------------------------------------------------------------------
 // StartKulrsPaletteRun
 // ---------------------------------------------------------------------------
 
 func TestStartKulrsPaletteRun_ReturnsCompletedResult(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms, &mockProvider{}, 10)
+	svc := service.New(ms, &kulrsAnalysisProvider{}, 10)
 
 	req := &service.KulrsPaletteRequest{
 		ProductID: "prod-1",
@@ -367,11 +419,12 @@ func TestStartKulrsPaletteRun_ReturnsCompletedResult(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&result))
 	assert.Equal(t, "completed", result.Status)
 	assert.NotEmpty(t, result.RunID)
+	require.NotNil(t, result.StructuredOutput)
 }
 
 func TestStartKulrsPaletteRun_PersistsCorrectRunContext(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms, &mockProvider{}, 10)
+	svc := service.New(ms, &kulrsAnalysisProvider{}, 10)
 
 	req := &service.KulrsPaletteRequest{
 		ProductID:  "prod-42",
@@ -397,7 +450,7 @@ func TestStartKulrsPaletteRun_PersistsCorrectRunContext(t *testing.T) {
 
 func TestStartKulrsPaletteRun_WithModelPreferences(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms, &mockProvider{}, 10)
+	svc := service.New(ms, &kulrsAnalysisProvider{}, 10)
 
 	req := &service.KulrsPaletteRequest{
 		ProductID: "prod-7",

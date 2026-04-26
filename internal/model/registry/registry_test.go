@@ -19,14 +19,14 @@ func TestRegistry_PickReturnsHealthyNode(t *testing.T) {
 	reg := registry.New([]registry.NodeConfig{
 		{Name: "n1", URL: "http://n1", Models: []string{"llama3"}},
 	})
-	node := reg.Pick("llama3")
+	node := reg.Pick("llama3", 0, 0)
 	require.NotNil(t, node)
 	assert.Equal(t, "http://n1", node.URL)
 }
 
 func TestRegistry_PickReturnsNilWhenNoNodes(t *testing.T) {
 	reg := registry.New(nil)
-	assert.Nil(t, reg.Pick("llama3"))
+	assert.Nil(t, reg.Pick("llama3", 0, 0))
 }
 
 func TestRegistry_PickSkipsUnhealthyNode(t *testing.T) {
@@ -36,7 +36,7 @@ func TestRegistry_PickSkipsUnhealthyNode(t *testing.T) {
 	})
 	reg.MarkFailed("http://n1")
 
-	node := reg.Pick("")
+	node := reg.Pick("", 0, 0)
 	require.NotNil(t, node)
 	assert.Equal(t, "http://n2", node.URL)
 }
@@ -46,10 +46,10 @@ func TestRegistry_MarkFailedThenMarkHealthy(t *testing.T) {
 		{Name: "n1", URL: "http://n1"},
 	})
 	reg.MarkFailed("http://n1")
-	assert.Nil(t, reg.Pick(""))
+	assert.Nil(t, reg.Pick("", 0, 0))
 
 	reg.MarkHealthy("http://n1")
-	assert.NotNil(t, reg.Pick(""))
+	assert.NotNil(t, reg.Pick("", 0, 0))
 }
 
 func TestRegistry_PickReturnsNilWhenAllUnhealthy(t *testing.T) {
@@ -59,7 +59,7 @@ func TestRegistry_PickReturnsNilWhenAllUnhealthy(t *testing.T) {
 	})
 	reg.MarkFailed("http://n1")
 	reg.MarkFailed("http://n2")
-	assert.Nil(t, reg.Pick(""))
+	assert.Nil(t, reg.Pick("", 0, 0))
 }
 
 func TestRegistry_PickByModel_OnlyMatchingNode(t *testing.T) {
@@ -68,7 +68,7 @@ func TestRegistry_PickByModel_OnlyMatchingNode(t *testing.T) {
 		{Name: "n2", URL: "http://n2", Models: []string{"llama3"}},
 	})
 
-	node := reg.Pick("llama3")
+	node := reg.Pick("llama3", 0, 0)
 	require.NotNil(t, node)
 	assert.Equal(t, "http://n2", node.URL)
 }
@@ -78,8 +78,8 @@ func TestRegistry_PickAnyModelWhenNodeHasNoModels(t *testing.T) {
 		{Name: "n1", URL: "http://n1", Models: nil},
 	})
 	// Node with empty Models accepts any model name.
-	assert.NotNil(t, reg.Pick("whatever"))
-	assert.NotNil(t, reg.Pick(""))
+	assert.NotNil(t, reg.Pick("whatever", 0, 0))
+	assert.NotNil(t, reg.Pick("", 0, 0))
 }
 
 func TestRegistry_PickPrefersLowerLoadHealthyNode(t *testing.T) {
@@ -88,7 +88,7 @@ func TestRegistry_PickPrefersLowerLoadHealthyNode(t *testing.T) {
 		{Name: "n2", URL: "http://n2", Models: []string{"llama3"}, MaxConcurrentRequests: 4, ActiveRequests: 1},
 	})
 
-	node := reg.Pick("llama3")
+	node := reg.Pick("llama3", 0, 0)
 	require.NotNil(t, node)
 	assert.Equal(t, "http://n2", node.URL)
 }
@@ -99,7 +99,29 @@ func TestRegistry_PickPrefersAvailableCapacityOverSaturatedNode(t *testing.T) {
 		{Name: "n2", URL: "http://n2", Models: []string{"llama3"}, MaxConcurrentRequests: 2, ActiveRequests: 1},
 	})
 
-	node := reg.Pick("llama3")
+	node := reg.Pick("llama3", 0, 0)
+	require.NotNil(t, node)
+	assert.Equal(t, "http://n2", node.URL)
+}
+
+func TestRegistry_PickSkipsNodeWhenRequestedMaxTokensExceedsNodeLimit(t *testing.T) {
+	reg := registry.New([]registry.NodeConfig{
+		{Name: "n1", URL: "http://n1", Models: []string{"llama3"}, MaxTokens: 256},
+		{Name: "n2", URL: "http://n2", Models: []string{"llama3"}, MaxTokens: 1024},
+	})
+
+	node := reg.Pick("llama3", 0, 512)
+	require.NotNil(t, node)
+	assert.Equal(t, "http://n2", node.URL)
+}
+
+func TestRegistry_PickSkipsNodeWhenContextWindowWouldOverflow(t *testing.T) {
+	reg := registry.New([]registry.NodeConfig{
+		{Name: "n1", URL: "http://n1", Models: []string{"llama3"}, CtxSize: 600},
+		{Name: "n2", URL: "http://n2", Models: []string{"llama3"}, CtxSize: 2048},
+	})
+
+	node := reg.Pick("llama3", 400, 300)
 	require.NotNil(t, node)
 	assert.Equal(t, "http://n2", node.URL)
 }
@@ -135,12 +157,12 @@ func TestRegistry_RefreshFromNodesUpdatesModelInventory(t *testing.T) {
 	err := reg.RefreshFromNodes(context.Background(), srv.Client())
 	require.NoError(t, err)
 
-	node := reg.Pick("llama3.2.gguf")
+	node := reg.Pick("llama3.2.gguf", 0, 0)
 	require.NotNil(t, node)
 	assert.Equal(t, []string{"llama3.2.gguf"}, node.Models)
 	assert.Equal(t, 3, node.MaxConcurrentRequests)
 	assert.Equal(t, 1, node.ActiveRequests)
-	assert.Nil(t, reg.Pick("mistral.gguf"))
+	assert.Nil(t, reg.Pick("mistral.gguf", 0, 0))
 }
 
 func TestRegistry_RefreshFromNodesMarksNodeUnavailableWhenNoModelLoaded(t *testing.T) {
@@ -161,7 +183,7 @@ func TestRegistry_RefreshFromNodesMarksNodeUnavailableWhenNoModelLoaded(t *testi
 
 	err := reg.RefreshFromNodes(context.Background(), srv.Client())
 	require.NoError(t, err)
-	assert.Nil(t, reg.Pick(""))
+	assert.Nil(t, reg.Pick("", 0, 0))
 }
 
 func TestRegistry_RefreshFromNodesMarksNodeUnavailableOnProbeFailure(t *testing.T) {
@@ -179,7 +201,7 @@ func TestRegistry_RefreshFromNodesMarksNodeUnavailableOnProbeFailure(t *testing.
 
 	err := reg.RefreshFromNodes(context.Background(), srv.Client())
 	require.Error(t, err)
-	assert.Nil(t, reg.Pick(""))
+	assert.Nil(t, reg.Pick("", 0, 0))
 }
 
 func TestRegistry_RefreshFromNodesKeepsHealthyNodeWhenMetricsUnavailable(t *testing.T) {
@@ -197,7 +219,7 @@ func TestRegistry_RefreshFromNodesKeepsHealthyNodeWhenMetricsUnavailable(t *test
 
 	err := reg.RefreshFromNodes(context.Background(), srv.Client())
 	require.Error(t, err)
-	node := reg.Pick("llama3.3.gguf")
+	node := reg.Pick("llama3.3.gguf", 0, 0)
 	require.NotNil(t, node)
 	assert.Equal(t, 0, node.ActiveRequests)
 }
@@ -248,7 +270,7 @@ func TestPool_CompleteMarksNodeFailedOnError(t *testing.T) {
 	require.Error(t, err)
 
 	// Node should now be unhealthy.
-	assert.Nil(t, reg.Pick(""))
+	assert.Nil(t, reg.Pick("", 0, 0))
 }
 
 func TestPool_CompleteErrorsWhenNoHealthyNode(t *testing.T) {
@@ -283,7 +305,7 @@ func TestPool_StreamMarksNodeFailedOnError(t *testing.T) {
 
 	err := pool.Stream(context.Background(), model.Request{}, func(_ string) error { return nil })
 	require.Error(t, err)
-	assert.Nil(t, reg.Pick(""))
+	assert.Nil(t, reg.Pick("", 0, 0))
 }
 
 func TestPool_StreamErrorsWhenNoHealthyNode(t *testing.T) {

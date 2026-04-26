@@ -60,7 +60,7 @@ func New(configs []NodeConfig) *Registry {
 // Pick returns the configuration of the first healthy node that supports the
 // requested model name.  When model is empty any healthy node qualifies.
 // Returns nil when no suitable node is available.
-func (r *Registry) Pick(model string) *NodeConfig {
+func (r *Registry) Pick(model string, estimatedPromptTokens int, requestedMaxTokens int) *NodeConfig {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
@@ -76,7 +76,7 @@ func (r *Registry) Pick(model string) *NodeConfig {
 				continue
 			}
 		}
-		if !supportsModel(n.config.Models, model) {
+		if !supportsModel(n.config.Models, model) || !supportsCapacityForRequest(n.config, estimatedPromptTokens, requestedMaxTokens) {
 			continue
 		}
 		available := nodeHasCapacity(n.config)
@@ -189,4 +189,14 @@ func nodeLoad(cfg NodeConfig) float64 {
 		return float64(cfg.ActiveRequests) / float64(cfg.MaxConcurrentRequests)
 	}
 	return float64(cfg.ActiveRequests)
+}
+
+func supportsCapacityForRequest(cfg NodeConfig, estimatedPromptTokens int, requestedMaxTokens int) bool {
+	if cfg.MaxTokens > 0 && requestedMaxTokens > 0 && requestedMaxTokens > cfg.MaxTokens {
+		return false
+	}
+	if cfg.CtxSize > 0 && estimatedPromptTokens > 0 && requestedMaxTokens > 0 {
+		return estimatedPromptTokens+requestedMaxTokens <= cfg.CtxSize
+	}
+	return true
 }

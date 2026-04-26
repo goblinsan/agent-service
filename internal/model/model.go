@@ -35,7 +35,10 @@ type Request struct {
 	Model     string
 	Messages  []Message
 	MaxTokens int
-	Stream    bool
+	// EstimatedPromptTokens is an approximate caller-provided token count for
+	// the input messages, used for routing decisions in multi-node pools.
+	EstimatedPromptTokens int
+	Stream                bool
 }
 
 type Response struct {

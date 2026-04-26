@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type kulrsAnalysisProvider struct{}
+
+func (p *kulrsAnalysisProvider) Complete(_ context.Context, _ model.Request) (*model.Response, error) {
+	return &model.Response{
+		Content:      `{"dominant_colors":["#112233","#223344"],"accent_colors":["#445566"],"description":"Moody blue-gold balance."}`,
+		FinishReason: "stop",
+	}, nil
+}
+
+func (p *kulrsAnalysisProvider) Stream(_ context.Context, _ model.Request, onChunk func(string) error) error {
+	return onChunk(`{"dominant_colors":["#112233","#223344"],"accent_colors":["#445566"],"description":"Moody blue-gold balance."}`)
+}
 
 // ---------------------------------------------------------------------------
 // POST /internal/chat
@@ -389,7 +403,7 @@ func TestInternalAutomationRun_StoresContext(t *testing.T) {
 
 func TestKulrsPaletteHandler_ValidRequest(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms, &mockProvider{}, 10)
+	svc := service.New(ms, &kulrsAnalysisProvider{}, 10)
 	router := api.NewRouter(svc)
 
 	body := map[string]any{
@@ -411,6 +425,7 @@ func TestKulrsPaletteHandler_ValidRequest(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&result))
 	assert.Equal(t, "completed", result["status"])
 	assert.NotEmpty(t, result["run_id"])
+	assert.NotNil(t, result["structured_output"])
 }
 
 func TestKulrsPaletteHandler_MissingProductID(t *testing.T) {
@@ -460,7 +475,7 @@ func TestKulrsPaletteHandler_InvalidJSON(t *testing.T) {
 
 func TestKulrsPaletteHandler_WithModelPreferences(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms, &mockProvider{}, 10)
+	svc := service.New(ms, &kulrsAnalysisProvider{}, 10)
 	router := api.NewRouter(svc)
 
 	body := map[string]any{
@@ -486,7 +501,7 @@ func TestKulrsPaletteHandler_WithModelPreferences(t *testing.T) {
 
 func TestKulrsPaletteHandler_StoresAutomationContext(t *testing.T) {
 	ms := newMockStore()
-	svc := service.New(ms, &mockProvider{}, 10)
+	svc := service.New(ms, &kulrsAnalysisProvider{}, 10)
 	router := api.NewRouter(svc)
 
 	body := map[string]any{

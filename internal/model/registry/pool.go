@@ -36,7 +36,7 @@ func NewPool(reg *Registry, newNode func(url string) model.Provider) *Pool {
 
 // Complete implements model.Provider.
 func (p *Pool) Complete(ctx context.Context, req model.Request) (*model.Response, error) {
-	node := p.registry.Pick(req.Model)
+	node := p.registry.Pick(req.Model, req.EstimatedPromptTokens, req.MaxTokens)
 	if node == nil {
 		return nil, fmt.Errorf("registry pool: no healthy node available for model %q", req.Model)
 	}
@@ -52,7 +52,7 @@ func (p *Pool) Complete(ctx context.Context, req model.Request) (*model.Response
 
 // Stream implements model.Provider.
 func (p *Pool) Stream(ctx context.Context, req model.Request, onChunk func(string) error) error {
-	node := p.registry.Pick(req.Model)
+	node := p.registry.Pick(req.Model, req.EstimatedPromptTokens, req.MaxTokens)
 	if node == nil {
 		return fmt.Errorf("registry pool: no healthy node available for model %q", req.Model)
 	}

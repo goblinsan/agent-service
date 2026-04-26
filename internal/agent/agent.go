@@ -79,7 +79,12 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 
 	// Steps are 1-based to align with human-readable step numbers in traces and SSE events.
 	for i := 1; i <= a.maxSteps; i++ {
-		resp, err := a.provider.Complete(ctx, model.Request{Model: run.ModelBackend, Messages: messages, MaxTokens: 512})
+		resp, err := a.provider.Complete(ctx, model.Request{
+			Model:                 run.ModelBackend,
+			Messages:              messages,
+			MaxTokens:             512,
+			EstimatedPromptTokens: estimatePromptTokens(messages),
+		})
 		if err != nil {
 			return fmt.Errorf("agent step %d: %w", i, err)
 		}
@@ -312,4 +317,20 @@ func chunkAssistantContent(content string) []string {
 		chunks = append(chunks, string(runes[start:end]))
 	}
 	return chunks
+}
+
+func estimatePromptTokens(messages []model.Message) int {
+	totalChars := 0
+	for _, message := range messages {
+		totalChars += len(message.Content)
+		for _, toolCall := range message.ToolCalls {
+			totalChars += len(toolCall.Name)
+		}
+		totalChars += len(message.ToolCallID)
+	}
+	if totalChars == 0 {
+		return 0
+	}
+	// Coarse heuristic aligned with typical 3-4 chars/token English prompts.
+	return (totalChars / 4) + 1
 }

@@ -37,6 +37,15 @@ type ModelPreferences struct {
 	MaxTokens int `json:"max_tokens,omitempty"`
 }
 
+// ResultFormatSpec describes the desired sync response shape for automation
+// callers. The first supported format is a JSON object parsed from the final
+// assistant response.
+type ResultFormatSpec struct {
+	Type string `json:"type,omitempty"`
+	// RequiredKeys lists keys that must be present when Type == "json_object".
+	RequiredKeys []string `json:"required_keys,omitempty"`
+}
+
 // ChatRunRequest is the internal orchestration contract accepted from the
 // gateway-chat-platform.  It carries the full normalised context so that
 // agent-service never has to contact the gateway again during execution.
@@ -93,6 +102,9 @@ type AutomationRunRequest struct {
 	ToolPolicy *ToolPolicySpec `json:"tool_policy,omitempty"`
 	// ModelPreferences expresses the caller's model-selection preferences.
 	ModelPreferences *ModelPreferences `json:"model_preferences,omitempty"`
+	// ResultFormat requests a structured sync response derived from the final
+	// assistant output.
+	ResultFormat *ResultFormatSpec `json:"result_format,omitempty"`
 	// ResponseMode controls whether the response is streamed ("stream") or
 	// returned as a single JSON object ("sync").  Defaults to "stream".
 	ResponseMode string `json:"response_mode,omitempty"`
@@ -109,6 +121,7 @@ type AutomationRunResult struct {
 	ToolCalls          []store.RunToolCall       `json:"tool_calls,omitempty"`
 	ApprovalRecords    []store.RunApprovalRecord `json:"approval_records,omitempty"`
 	Usage              *model.Usage              `json:"usage,omitempty"`
+	StructuredOutput   any                       `json:"structured_output,omitempty"`
 	OrchestrationState *OrchestrationState       `json:"orchestration_state,omitempty"`
 }
 
@@ -386,7 +399,7 @@ func (s *Service) StartAutomationRun(ctx context.Context, req *AutomationRunRequ
 	if req.ResponseMode == "stream" {
 		return s.streamAutomationRun(ctx, run, w, initialMessages, buildRunPolicy(req.ToolPolicy))
 	}
-	return s.syncAutomationRun(ctx, run, w, initialMessages, buildRunPolicy(req.ToolPolicy))
+	return s.syncAutomationRun(ctx, run, w, initialMessages, buildRunPolicy(req.ToolPolicy), req.ResultFormat)
 }
 
 // streamAutomationRun runs an automation request and emits SSE events to w.
@@ -434,7 +447,7 @@ func (s *Service) streamAutomationRun(ctx context.Context, run *store.Run, w htt
 
 // syncAutomationRun runs an automation request to completion and writes the
 // result as a single JSON response.
-func (s *Service) syncAutomationRun(ctx context.Context, run *store.Run, w http.ResponseWriter, initialMessages []model.Message, runPolicy policy.Policy) error {
+func (s *Service) syncAutomationRun(ctx context.Context, run *store.Run, w http.ResponseWriter, initialMessages []model.Message, runPolicy policy.Policy, resultFormat *ResultFormatSpec) error {
 	run.Status = "in_progress"
 	run.UpdatedAt = time.Now().UTC()
 	if err := s.store.UpdateRun(ctx, run); err != nil {
@@ -474,6 +487,10 @@ func (s *Service) syncAutomationRun(ctx context.Context, run *store.Run, w http.
 		resp.Status = "approval_required"
 		resp.OrchestrationState = paused
 		resp.Output = ""
+	} else if structured, err := parseStructuredOutput(run.Response, resultFormat); err != nil {
+		return fmt.Errorf("parse structured automation output: %w", err)
+	} else if structured != nil {
+		resp.StructuredOutput = structured
 	}
 	return json.NewEncoder(w).Encode(resp)
 }
@@ -688,8 +705,12 @@ func (s *Service) StartKulrsPaletteRun(ctx context.Context, req *KulrsPaletteReq
 		WorkflowID:       req.WorkflowID,
 		Prompt:           buildPalettePrompt(req.ProductID, req.ImageURLs),
 		ModelPreferences: req.ModelPreferences,
-		Metadata:         req.Metadata,
-		ResponseMode:     "sync",
+		ResultFormat: &ResultFormatSpec{
+			Type:         "json_object",
+			RequiredKeys: []string{"dominant_colors", "accent_colors", "description"},
+		},
+		Metadata:     req.Metadata,
+		ResponseMode: "sync",
 	}
 	return s.StartAutomationRun(ctx, auto, w)
 }
@@ -698,7 +719,9 @@ func (s *Service) StartKulrsPaletteRun(ctx context.Context, req *KulrsPaletteReq
 func buildPalettePrompt(productID string, imageURLs []string) string {
 	return fmt.Sprintf(
 		"Analyze the color palette for product %s from the following images: %s. "+
-			"Return the dominant colors, accent colors, and a short palette description.",
+			"Return JSON only with exactly this shape: "+
+			"{\"dominant_colors\":[\"#112233\"],\"accent_colors\":[\"#445566\"],\"description\":\"short palette description\"}. "+
+			"Colors must be uppercase hex values and description must be one sentence.",
 		productID,
 		strings.Join(imageURLs, ", "),
 	)
@@ -787,4 +810,25 @@ func preferredModel(prefs *ModelPreferences) string {
 		return ""
 	}
 	return prefs.Preferred
+}
+
+func parseStructuredOutput(output string, spec *ResultFormatSpec) (any, error) {
+	if spec == nil || spec.Type == "" {
+		return nil, nil
+	}
+	switch spec.Type {
+	case "json_object":
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &parsed); err != nil {
+			return nil, err
+		}
+		for _, key := range spec.RequiredKeys {
+			if _, ok := parsed[key]; !ok {
+				return nil, fmt.Errorf("missing required key %q", key)
+			}
+		}
+		return parsed, nil
+	default:
+		return nil, fmt.Errorf("unsupported result format %q", spec.Type)
+	}
 }
