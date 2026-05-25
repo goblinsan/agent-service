@@ -309,7 +309,8 @@ func internalChatHandler(svc *service.Service, m *metrics.Metrics) http.HandlerF
 					m.FailedRuns.Add(1)
 				}
 				slog.Error("chat run failed", "error", err)
-				http.Error(w, `{"error":"run failed"}`, http.StatusInternalServerError)
+				body, _ := json.Marshal(map[string]string{"error": err.Error()})
+				http.Error(w, string(body), http.StatusInternalServerError)
 			}
 			return
 		}
@@ -324,7 +325,7 @@ func internalChatHandler(svc *service.Service, m *metrics.Metrics) http.HandlerF
 				m.FailedRuns.Add(1)
 			}
 			slog.Error("chat run failed", "error", err)
-			_ = sse.Write(w, sse.Event{Type: sse.EventRunFailed, Data: map[string]string{"error": "run failed"}})
+			_ = sse.Write(w, sse.Event{Type: sse.EventRunFailed, Data: map[string]string{"error": err.Error()}})
 		}
 	}
 }
