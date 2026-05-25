@@ -104,7 +104,7 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 			Model:                 run.ModelBackend,
 			BackendNode:           run.BackendNode,
 			Messages:              messages,
-			MaxTokens:             8192,
+			MaxTokens:             16384,
 			EstimatedPromptTokens: estimatePromptTokens(messages),
 			Tools:                 a.toolSpecs,
 		})
