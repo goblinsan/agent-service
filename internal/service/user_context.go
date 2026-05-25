@@ -37,11 +37,12 @@ func (s *Service) ensureUserAndContext(ctx context.Context, userID string) []mod
 	if err != nil {
 		slog.Warn("list user plans failed", "user_id", userID, "err", err)
 	}
-	if len(memories) == 0 && len(events) == 0 && len(plans) == 0 {
-		return nil
-	}
 
 	var b strings.Builder
+	now := time.Now().UTC()
+	fmt.Fprintf(&b, "Current UTC date/time: %s (today is %s).\n", now.Format(time.RFC3339), now.Format("Monday, January 2, 2006"))
+	b.WriteString("Your training data is stale. For ANY question about current events, recent scores, standings, prices, releases, news, weather, or anything that could have changed in the last year (including questions phrased as \"this year\", \"latest\", \"current\", \"who won\", \"how much is\"), you MUST call web_search with a query that uses the actual current year shown above. Do NOT call web_search with a year from your training data. Cite the URL returned by web_search. Do not answer such questions from memory.\n\n")
+
 	fmt.Fprintf(&b, "Known facts about user %q:\n", userID)
 	if len(memories) == 0 {
 		b.WriteString("- (no durable facts recorded yet)\n")
@@ -68,7 +69,6 @@ func (s *Service) ensureUserAndContext(ctx context.Context, userID string) []mod
 		}
 	}
 	b.WriteString("\nUse these facts and events when relevant. If the user states a new durable preference or biographical fact, call memory_write. Append significant turns to the event log via memory tools where appropriate.")
-	b.WriteString("\nYour training data is stale. For any question about current events, recent scores, prices, releases, news, or anything that could have changed in the last year, you MUST call web_search before answering and cite the URL it returns. Do not answer such questions from memory.")
 
 	return []model.Message{{Role: model.RoleSystem, Content: b.String()}}
 }
