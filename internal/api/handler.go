@@ -29,6 +29,11 @@ type RouterOptions struct {
 	// inspect and mutate which llm-service node handles chat and automation
 	// traffic.
 	Registry *registry.Registry
+
+	// RoutingStore, when non-nil, is used by PUT /admin/routing to persist
+	// routing changes so they survive restarts.  Optional; in-memory only when
+	// nil.
+	RoutingStore RoutingStore
 }
 
 func NewRouter(svc *service.Service) http.Handler {
@@ -76,7 +81,7 @@ func NewRouterWithOptions(svc *service.Service, opts RouterOptions) http.Handler
 
 	if opts.Registry != nil {
 		r.Get("/admin/routing", getRoutingHandler(svc, opts.Registry))
-		r.Put("/admin/routing", putRoutingHandler(svc, opts.Registry))
+		r.Put("/admin/routing", putRoutingHandler(svc, opts.Registry, opts.RoutingStore))
 	}
 
 	return r

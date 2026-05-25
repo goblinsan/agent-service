@@ -158,10 +158,41 @@ func main() {
 		})
 	}
 
+	// Persisted routing overrides env defaults; env defaults are upserted on
+	// first boot so the DB is populated with the static config.
+	if llmRegistry != nil {
+		rc, err := pg.GetRouting(context.Background())
+		switch {
+		case err == nil:
+			svc.SetChatNode(rc.ChatNode)
+			svc.SetAutomationNode(rc.AutomationNode)
+			slog.Info("routing loaded from db",
+				"chat_node", rc.ChatNode,
+				"automation_node", rc.AutomationNode,
+			)
+		case store.IsNoRows(err):
+			seed := store.RoutingConfig{
+				ChatNode:       cfg.ChatNode,
+				AutomationNode: cfg.AutomationNode,
+			}
+			if err := pg.UpsertRouting(context.Background(), seed); err != nil {
+				slog.Warn("failed to seed routing config", "error", err)
+			} else {
+				slog.Info("routing seeded from env",
+					"chat_node", seed.ChatNode,
+					"automation_node", seed.AutomationNode,
+				)
+			}
+		default:
+			slog.Warn("failed to load routing config", "error", err)
+		}
+	}
+
 	router := api.NewRouterWithOptions(svc, api.RouterOptions{
-		APIKey:   cfg.APIKey,
-		Metrics:  m,
-		Registry: llmRegistry,
+		APIKey:       cfg.APIKey,
+		Metrics:      m,
+		Registry:     llmRegistry,
+		RoutingStore: pg,
 	})
 
 	srv := &http.Server{

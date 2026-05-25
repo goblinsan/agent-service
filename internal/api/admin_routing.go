@@ -1,13 +1,22 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 
 	"github.com/goblinsan/agent-service/internal/model/registry"
 	"github.com/goblinsan/agent-service/internal/service"
+	"github.com/goblinsan/agent-service/internal/store"
 )
+
+// RoutingStore is the subset of the store used to persist routing.  Decoupled
+// from store.Store so unit tests and the in-memory mode do not need it.
+type RoutingStore interface {
+	GetRouting(ctx context.Context) (store.RoutingConfig, error)
+	UpsertRouting(ctx context.Context, rc store.RoutingConfig) error
+}
 
 // routingNodeView is the JSON projection of a registry node returned by
 // GET /admin/routing.
@@ -63,7 +72,7 @@ func getRoutingHandler(svc *service.Service, reg *registry.Registry) http.Handle
 	}
 }
 
-func putRoutingHandler(svc *service.Service, reg *registry.Registry) http.HandlerFunc {
+func putRoutingHandler(svc *service.Service, reg *registry.Registry, rs RoutingStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			ChatNode       *string `json:"chat_node"`
@@ -88,6 +97,16 @@ func putRoutingHandler(svc *service.Service, reg *registry.Registry) http.Handle
 				return
 			}
 			svc.SetAutomationNode(name)
+		}
+		if rs != nil {
+			if err := rs.UpsertRouting(r.Context(), store.RoutingConfig{
+				ChatNode:       svc.ChatNode(),
+				AutomationNode: svc.AutomationNode(),
+			}); err != nil {
+				slog.Error("failed to persist routing config", "error", err)
+				http.Error(w, `{"error":"failed to persist routing"}`, http.StatusInternalServerError)
+				return
+			}
 		}
 		slog.Info("routing updated",
 			"chat_node", svc.ChatNode(),
