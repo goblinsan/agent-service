@@ -86,6 +86,12 @@ func main() {
 	if err := reg.Register(&tools.MemoryWriteTool{Store: pg}); err != nil {
 		slog.Warn("register memory_write", "error", err)
 	}
+	if err := reg.Register(&tools.PlanListTool{Store: pg}); err != nil {
+		slog.Warn("register plan_list", "error", err)
+	}
+	if err := reg.Register(&tools.PlanUpsertTool{Store: pg}); err != nil {
+		slog.Warn("register plan_upsert", "error", err)
+	}
 	if braveKey := os.Getenv("BRAVE_SEARCH_API_KEY"); braveKey != "" {
 		if err := reg.Register(&tools.WebSearchTool{APIKey: braveKey}); err != nil {
 			slog.Warn("register web_search", "error", err)
