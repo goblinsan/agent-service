@@ -183,8 +183,8 @@ func (s *Service) StartChatRun(ctx context.Context, req *ChatRunRequest, w http.
 	if req.ModelPreferences != nil {
 		modelBackend = req.ModelPreferences.Preferred
 	}
-	if s.chatModel != "" {
-		modelBackend = s.chatModel
+	if s.ChatModel() != "" {
+		modelBackend = s.ChatModel()
 	}
 
 	run := &store.Run{
@@ -194,7 +194,7 @@ func (s *Service) StartChatRun(ctx context.Context, req *ChatRunRequest, w http.
 		Prompt:       prompt,
 		Status:       "created",
 		ModelBackend: modelBackend,
-		BackendNode:  s.chatNode,
+		BackendNode:  s.ChatNode(),
 		RequestID:    req.RequestID,
 		ThreadID:     req.ThreadID,
 		UserID:       req.UserID,
@@ -259,16 +259,16 @@ func (s *Service) StartGatewayRun(ctx context.Context, req *GatewayRunRequest, w
 	modelBackend := req.Model
 	backendNode := ""
 	if source == string(store.RunSourceChat) {
-		backendNode = s.chatNode
-		if s.chatModel != "" {
-			modelBackend = s.chatModel
+		backendNode = s.ChatNode()
+		if s.ChatModel() != "" {
+			modelBackend = s.ChatModel()
 		}
 	} else {
-		if modelBackend == "" && s.automationModel != "" {
-			modelBackend = s.automationModel
+		if modelBackend == "" && s.AutomationModel() != "" {
+			modelBackend = s.AutomationModel()
 		}
 		if modelBackend == "" {
-			backendNode = s.automationNode
+			backendNode = s.AutomationNode()
 		}
 	}
 	run := &store.Run{
@@ -333,8 +333,8 @@ func (s *Service) StartChatRunSync(ctx context.Context, req *ChatRunRequest, w h
 	if req.ModelPreferences != nil {
 		modelBackend = req.ModelPreferences.Preferred
 	}
-	if s.chatModel != "" {
-		modelBackend = s.chatModel
+	if s.ChatModel() != "" {
+		modelBackend = s.ChatModel()
 	}
 
 	run := &store.Run{
@@ -344,7 +344,7 @@ func (s *Service) StartChatRunSync(ctx context.Context, req *ChatRunRequest, w h
 		Prompt:       prompt,
 		Status:       "created",
 		ModelBackend: modelBackend,
-		BackendNode:  s.chatNode,
+		BackendNode:  s.ChatNode(),
 		RequestID:    req.RequestID,
 		ThreadID:     req.ThreadID,
 		UserID:       req.UserID,
@@ -401,13 +401,13 @@ func (s *Service) StartAutomationRun(ctx context.Context, req *AutomationRunRequ
 	if req.ModelPreferences != nil {
 		modelBackend = req.ModelPreferences.Preferred
 	}
-	if modelBackend == "" && s.automationModel != "" {
-		modelBackend = s.automationModel
+	if modelBackend == "" && s.AutomationModel() != "" {
+		modelBackend = s.AutomationModel()
 	}
 	backendNode := ""
 	if modelBackend == "" {
 		// No explicit model preference — pin to the configured automation node.
-		backendNode = s.automationNode
+		backendNode = s.AutomationNode()
 	}
 
 	initialMessages := buildAutomationMessages(req)

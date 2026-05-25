@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/goblinsan/agent-service/internal/agent"
@@ -51,10 +52,55 @@ type Service struct {
 	agent           *agent.Agent
 	approvals       *policy.Approvals
 	metrics         *metrics.Metrics
+	routeMu         sync.RWMutex
 	chatNode        string
 	automationNode  string
 	chatModel       string
 	automationModel string
+}
+
+// ChatNode returns the current chat-routing node name (may be empty).
+func (s *Service) ChatNode() string {
+	s.routeMu.RLock()
+	defer s.routeMu.RUnlock()
+	return s.chatNode
+}
+
+// AutomationNode returns the current automation-routing node name (may be empty).
+func (s *Service) AutomationNode() string {
+	s.routeMu.RLock()
+	defer s.routeMu.RUnlock()
+	return s.automationNode
+}
+
+// ChatModel returns the deprecated chat model override (may be empty).
+func (s *Service) ChatModel() string {
+	s.routeMu.RLock()
+	defer s.routeMu.RUnlock()
+	return s.chatModel
+}
+
+// AutomationModel returns the deprecated automation model default (may be empty).
+func (s *Service) AutomationModel() string {
+	s.routeMu.RLock()
+	defer s.routeMu.RUnlock()
+	return s.automationModel
+}
+
+// SetChatNode updates the chat-routing node name at runtime.  Pass an empty
+// string to fall back to model-based selection.  The change applies to
+// subsequent runs.
+func (s *Service) SetChatNode(name string) {
+	s.routeMu.Lock()
+	defer s.routeMu.Unlock()
+	s.chatNode = name
+}
+
+// SetAutomationNode updates the automation-routing node name at runtime.
+func (s *Service) SetAutomationNode(name string) {
+	s.routeMu.Lock()
+	defer s.routeMu.Unlock()
+	s.automationNode = name
 }
 
 // New returns a Service with default options (no runner, no base policy).

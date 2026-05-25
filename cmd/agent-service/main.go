@@ -45,6 +45,7 @@ func main() {
 	pg := store.NewPostgres(db)
 
 	var provider model.Provider
+	var llmRegistry *registry.Registry
 	switch {
 	case len(cfg.LLMNodes) > 0:
 		// Multi-node pool: build a registry from the node URLs and wrap it in a Pool.
@@ -60,6 +61,7 @@ func main() {
 		provider = registry.NewPool(reg, func(url string) model.Provider {
 			return llama.New(url)
 		})
+		llmRegistry = reg
 		slog.Info("llm-service pool configured", "nodes", len(nodes))
 	case cfg.LlamaURL != "":
 		provider = llama.New(cfg.LlamaURL)
@@ -157,8 +159,9 @@ func main() {
 	}
 
 	router := api.NewRouterWithOptions(svc, api.RouterOptions{
-		APIKey:  cfg.APIKey,
-		Metrics: m,
+		APIKey:   cfg.APIKey,
+		Metrics:  m,
+		Registry: llmRegistry,
 	})
 
 	srv := &http.Server{

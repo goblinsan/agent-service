@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/goblinsan/agent-service/internal/metrics"
+	"github.com/goblinsan/agent-service/internal/model/registry"
 	"github.com/goblinsan/agent-service/internal/service"
 	"github.com/goblinsan/agent-service/internal/sse"
 	"github.com/goblinsan/agent-service/internal/store"
@@ -23,6 +24,11 @@ type RouterOptions struct {
 	// Metrics, when non-nil, exposes counters at GET /metrics and instruments
 	// every request with the middleware.
 	Metrics *metrics.Metrics
+
+	// Registry, when non-nil, enables the /admin/routing endpoints that
+	// inspect and mutate which llm-service node handles chat and automation
+	// traffic.
+	Registry *registry.Registry
 }
 
 func NewRouter(svc *service.Service) http.Handler {
@@ -67,6 +73,11 @@ func NewRouterWithOptions(svc *service.Service, opts RouterOptions) http.Handler
 	r.Post("/internal/automation", internalAutomationHandler(svc, opts.Metrics))
 	r.Post("/run", gatewayRunHandler(svc, opts.Metrics))
 	r.Post("/internal/kulrs/palette", kulrsPaletteHandler(svc, opts.Metrics))
+
+	if opts.Registry != nil {
+		r.Get("/admin/routing", getRoutingHandler(svc, opts.Registry))
+		r.Put("/admin/routing", putRoutingHandler(svc, opts.Registry))
+	}
 
 	return r
 }

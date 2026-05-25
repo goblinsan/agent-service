@@ -195,6 +195,39 @@ func (r *Registry) Nodes() []NodeConfig {
 	return out
 }
 
+// NodeStatus pairs a NodeConfig with its current health flag.
+type NodeStatus struct {
+	Config  NodeConfig
+	Healthy bool
+}
+
+// Snapshot returns a copy of every registered node along with whether it is
+// currently healthy.  Intended for admin / observability endpoints.
+func (r *Registry) Snapshot() []NodeStatus {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]NodeStatus, len(r.nodes))
+	for i, n := range r.nodes {
+		out[i] = NodeStatus{Config: n.config, Healthy: n.healthy}
+	}
+	return out
+}
+
+// HasNode reports whether a node with the given name is registered.
+func (r *Registry) HasNode(name string) bool {
+	if name == "" {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, n := range r.nodes {
+		if n.config.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // supportsModel reports whether the models slice contains the requested name.
 // When the slice is empty the node is considered to accept any model.
 func supportsModel(models []string, requested string) bool {
