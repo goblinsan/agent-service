@@ -226,6 +226,32 @@ func (s *Service) ListRunSteps(ctx context.Context, runID string) ([]*store.RunS
 	return s.store.ListSteps(ctx, runID)
 }
 
+// ListThreadsForUser returns a summary of chat threads owned by userID,
+// newest activity first.  Used by chat clients (web UI, iOS app) to render a
+// thread list / sidebar so users can switch between previous conversations.
+func (s *Service) ListThreadsForUser(ctx context.Context, userID string, limit int) ([]store.ThreadSummary, error) {
+	return s.store.ListThreadsForUser(ctx, userID, limit)
+}
+
+// GetThreadForUser returns the ordered message history for a thread, scoped to
+// the requesting user.  Returns store.ErrNotFound when the thread is not owned
+// by the user.
+func (s *Service) GetThreadForUser(ctx context.Context, userID, threadID string) ([]store.ThreadMessage, error) {
+	return s.store.GetThreadForUser(ctx, userID, threadID)
+}
+
+// DeleteThreadForUser removes a thread owned by userID.  Returns
+// store.ErrNotFound when the thread is not owned by the user.
+func (s *Service) DeleteThreadForUser(ctx context.Context, userID, threadID string) error {
+	return s.store.DeleteThreadForUser(ctx, userID, threadID)
+}
+
+// RenameThreadForUser updates the human-readable title for a thread owned by
+// userID.  Returns store.ErrNotFound when the thread is not owned by the user.
+func (s *Service) RenameThreadForUser(ctx context.Context, userID, threadID, title string) error {
+	return s.store.RenameThreadForUser(ctx, userID, threadID, title)
+}
+
 // recordRunMetrics updates in-process counters after a run finishes.
 // It is a no-op when the service was created without a Metrics instance.
 func (s *Service) recordRunMetrics(run *store.Run, latency time.Duration) {

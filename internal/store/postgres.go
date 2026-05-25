@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -263,4 +264,196 @@ func marshalStructuredOutput(value any) (sql.NullString, error) {
 		return sql.NullString{}, err
 	}
 	return sql.NullString{String: string(raw), Valid: true}, nil
+}
+
+// ListThreadsForUser returns a summary of every chat thread (session) that has
+// at least one run owned by userID, newest activity first.  Truncated to limit.
+// Session.Name is exposed as Title; when Name is the auto-placeholder "auto"
+// the first user prompt is used instead so the list is human-readable.
+func (p *Postgres) ListThreadsForUser(ctx context.Context, userID string, limit int) ([]ThreadSummary, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := p.db.QueryContext(ctx, `
+		WITH user_sessions AS (
+			SELECT DISTINCT session_id
+			FROM runs
+			WHERE user_id = $1 AND session_id IS NOT NULL
+		),
+		agg AS (
+			SELECT
+				r.session_id,
+				MAX(r.updated_at) AS last_updated,
+				COUNT(*) AS run_count,
+				(ARRAY_AGG(r.response  ORDER BY r.updated_at DESC) FILTER (WHERE r.response IS NOT NULL AND r.response <> ''))[1] AS last_response,
+				(ARRAY_AGG(r.prompt    ORDER BY r.updated_at DESC))[1] AS last_prompt,
+				(ARRAY_AGG(r.agent_id  ORDER BY r.updated_at DESC) FILTER (WHERE r.agent_id IS NOT NULL AND r.agent_id <> ''))[1] AS last_agent_id,
+				(ARRAY_AGG(r.prompt    ORDER BY r.created_at ASC))[1]  AS first_prompt
+			FROM runs r
+			WHERE r.user_id = $1 AND r.session_id IS NOT NULL
+			GROUP BY r.session_id
+		)
+		SELECT s.id, s.name, s.created_at, a.last_updated, a.run_count,
+		       a.last_response, a.last_prompt, a.last_agent_id, a.first_prompt
+		FROM agg a
+		JOIN sessions s ON s.id = a.session_id
+		WHERE s.id IN (SELECT session_id FROM user_sessions)
+		ORDER BY a.last_updated DESC
+		LIMIT $2`,
+		userID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]ThreadSummary, 0, 16)
+	for rows.Next() {
+		var t ThreadSummary
+		var name sql.NullString
+		var lastResp, lastPrompt, lastAgent, firstPrompt sql.NullString
+		var runCount int
+		if err := rows.Scan(
+			&t.ID, &name, &t.CreatedAt, &t.UpdatedAt, &runCount,
+			&lastResp, &lastPrompt, &lastAgent, &firstPrompt,
+		); err != nil {
+			return nil, err
+		}
+		// Each run is roughly one user message + one assistant message.
+		t.MessageCount = runCount * 2
+		t.LastAgentID = lastAgent.String
+
+		// Title: prefer human-set session name, else first user prompt (trimmed).
+		title := strings.TrimSpace(name.String)
+		if title == "" || title == "auto" {
+			title = strings.TrimSpace(firstPrompt.String)
+		}
+		t.Title = truncate(title, 80)
+		if t.Title == "" {
+			t.Title = "New chat"
+		}
+
+		snippet := strings.TrimSpace(lastResp.String)
+		if snippet == "" {
+			snippet = strings.TrimSpace(lastPrompt.String)
+		}
+		t.LastSnippet = truncate(snippet, 140)
+
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// GetThreadForUser returns the ordered user/assistant message history for a
+// thread, restricted to threads that have at least one run owned by userID.
+// Each run row contributes a user message (prompt) followed by an assistant
+// message (response, if any).  Returns ErrNotFound when the thread is not
+// owned by the user or has no runs.
+func (p *Postgres) GetThreadForUser(ctx context.Context, userID, threadID string) ([]ThreadMessage, error) {
+	// Authorisation: confirm this user owns at least one run in the thread.
+	var ownedRuns int
+	if err := p.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM runs WHERE session_id = $1 AND user_id = $2`,
+		threadID, userID,
+	).Scan(&ownedRuns); err != nil {
+		return nil, err
+	}
+	if ownedRuns == 0 {
+		return nil, ErrNotFound
+	}
+
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT id, prompt, response, agent_id, created_at, updated_at
+		FROM runs
+		WHERE session_id = $1
+		ORDER BY created_at ASC, id ASC`,
+		threadID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]ThreadMessage, 0, ownedRuns*2)
+	for rows.Next() {
+		var runID, prompt string
+		var response, agentID sql.NullString
+		var createdAt, updatedAt sql.NullTime
+		if err := rows.Scan(&runID, &prompt, &response, &agentID, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		if prompt != "" {
+			out = append(out, ThreadMessage{
+				Role:      "user",
+				Content:   prompt,
+				CreatedAt: createdAt.Time,
+				RunID:     runID,
+				AgentID:   agentID.String,
+			})
+		}
+		if response.Valid && strings.TrimSpace(response.String) != "" {
+			ts := updatedAt.Time
+			if ts.IsZero() {
+				ts = createdAt.Time
+			}
+			out = append(out, ThreadMessage{
+				Role:      "assistant",
+				Content:   response.String,
+				CreatedAt: ts,
+				RunID:     runID,
+				AgentID:   agentID.String,
+			})
+		}
+	}
+	return out, rows.Err()
+}
+
+// DeleteThreadForUser removes a thread and its runs, scoped to the requesting
+// user.  Returns ErrNotFound when the thread does not belong to the user.
+// Relies on the ON DELETE CASCADE from runs.session_id to clean up runs.
+func (p *Postgres) DeleteThreadForUser(ctx context.Context, userID, threadID string) error {
+	var ownedRuns int
+	if err := p.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM runs WHERE session_id = $1 AND user_id = $2`,
+		threadID, userID,
+	).Scan(&ownedRuns); err != nil {
+		return err
+	}
+	if ownedRuns == 0 {
+		return ErrNotFound
+	}
+	_, err := p.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1`, threadID)
+	return err
+}
+
+// RenameThreadForUser updates the session.name (thread title), scoped to the
+// requesting user.  Returns ErrNotFound when the thread does not belong to
+// the user.
+func (p *Postgres) RenameThreadForUser(ctx context.Context, userID, threadID, title string) error {
+	var ownedRuns int
+	if err := p.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM runs WHERE session_id = $1 AND user_id = $2`,
+		threadID, userID,
+	).Scan(&ownedRuns); err != nil {
+		return err
+	}
+	if ownedRuns == 0 {
+		return ErrNotFound
+	}
+	_, err := p.db.ExecContext(ctx,
+		`UPDATE sessions SET name = $1 WHERE id = $2`,
+		truncate(strings.TrimSpace(title), 200), threadID,
+	)
+	return err
+}
+
+func truncate(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max-1]) + "…"
 }

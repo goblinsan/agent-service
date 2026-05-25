@@ -411,3 +411,12 @@ func TestRun_PerRunPolicy_OverridesBase(t *testing.T) {
 	require.Len(t, run.ToolCalls, 1)
 	assert.Contains(t, run.ToolCalls[0].Error, "denied by policy")
 }
+
+func (m *mockStore) ListThreadsForUser(_ context.Context, _ string, _ int) ([]store.ThreadSummary, error) {
+	return nil, nil
+}
+func (m *mockStore) GetThreadForUser(_ context.Context, _, _ string) ([]store.ThreadMessage, error) {
+	return nil, nil
+}
+func (m *mockStore) DeleteThreadForUser(_ context.Context, _, _ string) error { return nil }
+func (m *mockStore) RenameThreadForUser(_ context.Context, _, _, _ string) error { return nil }

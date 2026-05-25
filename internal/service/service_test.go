@@ -133,3 +133,12 @@ func TestStartRun_RunPersistedAsCompleted(t *testing.T) {
 	assert.Equal(t, "completed", run.Status)
 	assert.NotEmpty(t, run.Response)
 }
+
+func (m *mockStore) ListThreadsForUser(_ context.Context, _ string, _ int) ([]store.ThreadSummary, error) {
+	return nil, nil
+}
+func (m *mockStore) GetThreadForUser(_ context.Context, _, _ string) ([]store.ThreadMessage, error) {
+	return nil, nil
+}
+func (m *mockStore) DeleteThreadForUser(_ context.Context, _, _ string) error { return nil }
+func (m *mockStore) RenameThreadForUser(_ context.Context, _, _, _ string) error { return nil }

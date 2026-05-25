@@ -283,3 +283,12 @@ func TestApproveApproval_AlreadyDecided(t *testing.T) {
 	router.ServeHTTP(rr2, req2)
 	assert.Equal(t, http.StatusNotFound, rr2.Code)
 }
+
+func (m *mockStore) ListThreadsForUser(_ context.Context, _ string, _ int) ([]store.ThreadSummary, error) {
+	return nil, nil
+}
+func (m *mockStore) GetThreadForUser(_ context.Context, _, _ string) ([]store.ThreadMessage, error) {
+	return nil, nil
+}
+func (m *mockStore) DeleteThreadForUser(_ context.Context, _, _ string) error { return nil }
+func (m *mockStore) RenameThreadForUser(_ context.Context, _, _, _ string) error { return nil }

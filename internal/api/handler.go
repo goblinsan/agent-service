@@ -2,8 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -78,6 +80,15 @@ func NewRouterWithOptions(svc *service.Service, opts RouterOptions) http.Handler
 	r.Post("/internal/automation", internalAutomationHandler(svc, opts.Metrics))
 	r.Post("/run", gatewayRunHandler(svc, opts.Metrics))
 	r.Post("/internal/kulrs/palette", kulrsPaletteHandler(svc, opts.Metrics))
+
+	// Per-user thread (session) browsing endpoints used by the chat web UI
+	// and the iOS companion app to list, load, rename, and delete prior
+	// conversations.  The user is identified by the X-User-ID header so a
+	// single API key can serve multiple end users.
+	r.Get("/internal/threads", listThreadsHandler(svc))
+	r.Get("/internal/threads/{threadID}", getThreadHandler(svc))
+	r.Patch("/internal/threads/{threadID}", renameThreadHandler(svc))
+	r.Delete("/internal/threads/{threadID}", deleteThreadHandler(svc))
 
 	if opts.Registry != nil {
 		r.Get("/admin/routing", getRoutingHandler(svc, opts.Registry))
@@ -408,5 +419,125 @@ func gatewayRunHandler(svc *service.Service, m *metrics.Metrics) http.HandlerFun
 			slog.Error("gateway compatibility run failed", "error", err)
 			http.Error(w, `{"error":"run failed"}`, http.StatusInternalServerError)
 		}
+	}
+}
+
+// listThreadsHandler returns a paginated summary of chat threads owned by the
+// requesting user.  Used by chat clients (web, iOS) to render a thread list.
+func listThreadsHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		limit := 100
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		threads, err := svc.ListThreadsForUser(r.Context(), userID, limit)
+		if err != nil {
+			slog.Error("list threads failed", "error", err, "user_id", userID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		if threads == nil {
+			threads = []store.ThreadSummary{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"threads": threads}); err != nil {
+			slog.Error("failed to encode threads response", "error", err)
+		}
+	}
+}
+
+// getThreadHandler returns the ordered message history for a thread, scoped to
+// the requesting user.
+func getThreadHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		threadID := chi.URLParam(r, "threadID")
+		messages, err := svc.GetThreadForUser(r.Context(), userID, threadID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				http.Error(w, `{"error":"thread not found"}`, http.StatusNotFound)
+				return
+			}
+			slog.Error("get thread failed", "error", err, "user_id", userID, "thread_id", threadID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		if messages == nil {
+			messages = []store.ThreadMessage{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"thread_id": threadID,
+			"messages":  messages,
+		}); err != nil {
+			slog.Error("failed to encode thread response", "error", err)
+		}
+	}
+}
+
+// renameThreadHandler updates the human-readable title of a thread owned by
+// the requesting user.
+func renameThreadHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		threadID := chi.URLParam(r, "threadID")
+		var req struct {
+			Title string `json:"title"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.Title) == "" {
+			http.Error(w, `{"error":"title is required"}`, http.StatusBadRequest)
+			return
+		}
+		if err := svc.RenameThreadForUser(r.Context(), userID, threadID, req.Title); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				http.Error(w, `{"error":"thread not found"}`, http.StatusNotFound)
+				return
+			}
+			slog.Error("rename thread failed", "error", err, "user_id", userID, "thread_id", threadID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// deleteThreadHandler removes a thread owned by the requesting user.
+func deleteThreadHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		threadID := chi.URLParam(r, "threadID")
+		if err := svc.DeleteThreadForUser(r.Context(), userID, threadID); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				http.Error(w, `{"error":"thread not found"}`, http.StatusNotFound)
+				return
+			}
+			slog.Error("delete thread failed", "error", err, "user_id", userID, "thread_id", threadID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }

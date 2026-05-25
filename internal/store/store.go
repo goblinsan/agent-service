@@ -133,6 +133,28 @@ type UserPlan struct {
 	UpdatedAt time.Time
 }
 
+// ThreadSummary is a compact description of a chat thread (session) belonging
+// to a user, suitable for rendering in a thread list / sidebar.
+type ThreadSummary struct {
+	ID            string    `json:"id"`
+	Title         string    `json:"title"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	MessageCount  int       `json:"message_count"`
+	LastSnippet   string    `json:"last_snippet,omitempty"`
+	LastAgentID   string    `json:"last_agent_id,omitempty"`
+}
+
+// ThreadMessage is a single user/assistant message reconstructed from a run
+// row when streaming back the contents of a thread.
+type ThreadMessage struct {
+	Role      string    `json:"role"`    // "user" | "assistant"
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
+	RunID     string    `json:"run_id,omitempty"`
+	AgentID   string    `json:"agent_id,omitempty"`
+}
+
 type Store interface {
 	CreateSession(ctx context.Context, s *Session) error
 	GetSession(ctx context.Context, id string) (*Session, error)
@@ -141,6 +163,12 @@ type Store interface {
 	UpdateRun(ctx context.Context, r *Run) error
 	CreateStep(ctx context.Context, step *RunStep) error
 	ListSteps(ctx context.Context, runID string) ([]*RunStep, error)
+
+	// Per-user thread (session) browsing for chat clients.
+	ListThreadsForUser(ctx context.Context, userID string, limit int) ([]ThreadSummary, error)
+	GetThreadForUser(ctx context.Context, userID, threadID string) ([]ThreadMessage, error)
+	DeleteThreadForUser(ctx context.Context, userID, threadID string) error
+	RenameThreadForUser(ctx context.Context, userID, threadID, title string) error
 
 	// Per-user identity, memory, event log, and plans.
 	EnsureUser(ctx context.Context, id, displayName string) error
