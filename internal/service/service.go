@@ -31,14 +31,18 @@ type ServiceOptions struct {
 	// ToolSpecs is the static list of tools advertised to the model on every
 	// completion request. Should match the tools registered with Runner.
 	ToolSpecs []model.ToolSpec
-	// ChatModel, when non-empty, FORCES every chat run to use this model
-	// regardless of the client's model preference. Set this to pin chat to a
-	// single strong model (e.g. the 14B on papai). Leave empty to honour the
-	// client's preference.
-	ChatModel string
-	// AutomationModel, when non-empty, is used as the default for automation
-	// runs that arrive without an explicit model preference. It does NOT
-	// override an explicit preference.
+	// ChatNode, when non-empty, pins every chat run to the registered
+	// llm-service node with this Name (e.g. "papai").  Routing by node name
+	// avoids the case-sensitive, model-string matching that previously
+	// caused brittle routing.  Set via the CHAT_NODE env var.
+	ChatNode string
+	// AutomationNode is the default registered node for automation runs that
+	// arrive without an explicit model preference.  Set via the
+	// AUTOMATION_NODE env var.
+	AutomationNode string
+	// ChatModel and AutomationModel are deprecated string-based overrides
+	// kept only for backward compatibility.  Prefer ChatNode/AutomationNode.
+	ChatModel       string
 	AutomationModel string
 }
 
@@ -47,6 +51,8 @@ type Service struct {
 	agent           *agent.Agent
 	approvals       *policy.Approvals
 	metrics         *metrics.Metrics
+	chatNode        string
+	automationNode  string
 	chatModel       string
 	automationModel string
 }
@@ -69,6 +75,8 @@ func NewWithOptions(s store.Store, p model.Provider, maxSteps int, opts ServiceO
 		}),
 		approvals:       approvals,
 		metrics:         opts.Metrics,
+		chatNode:        opts.ChatNode,
+		automationNode:  opts.AutomationNode,
 		chatModel:       opts.ChatModel,
 		automationModel: opts.AutomationModel,
 	}

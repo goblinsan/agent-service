@@ -49,8 +49,8 @@ func main() {
 	case len(cfg.LLMNodes) > 0:
 		// Multi-node pool: build a registry from the node URLs and wrap it in a Pool.
 		nodes := make([]registry.NodeConfig, len(cfg.LLMNodes))
-		for i, u := range cfg.LLMNodes {
-			nodes[i] = registry.NodeConfig{Name: fmt.Sprintf("node-%d", i+1), URL: u}
+		for i, n := range cfg.LLMNodes {
+			nodes[i] = registry.NodeConfig{Name: n.Name, URL: n.URL}
 		}
 		reg := registry.New(nodes)
 		if err := refreshNodeRegistry(context.Background(), reg); err != nil {
@@ -116,11 +116,17 @@ func main() {
 
 	chatModel := os.Getenv("CHAT_MODEL")
 	automationModel := os.Getenv("AUTOMATION_MODEL")
+	if cfg.ChatNode != "" {
+		slog.Info("chat node configured", "node", cfg.ChatNode)
+	}
+	if cfg.AutomationNode != "" {
+		slog.Info("automation node configured", "node", cfg.AutomationNode)
+	}
 	if chatModel != "" {
-		slog.Info("chat model override configured", "model", chatModel)
+		slog.Info("chat model override configured (deprecated; prefer CHAT_NODE)", "model", chatModel)
 	}
 	if automationModel != "" {
-		slog.Info("automation model default configured", "model", automationModel)
+		slog.Info("automation model default configured (deprecated; prefer AUTOMATION_NODE)", "model", automationModel)
 	}
 
 	var svc *service.Service
@@ -132,6 +138,8 @@ func main() {
 			Runner:          agentrunner.NewMCPRunner(cfg.MCPEndpoint, nil),
 			Metrics:         m,
 			ToolSpecs:       toolSpecs,
+			ChatNode:        cfg.ChatNode,
+			AutomationNode:  cfg.AutomationNode,
 			ChatModel:       chatModel,
 			AutomationModel: automationModel,
 		})
@@ -141,6 +149,8 @@ func main() {
 			Runner:          nativeRunner,
 			Metrics:         m,
 			ToolSpecs:       toolSpecs,
+			ChatNode:        cfg.ChatNode,
+			AutomationNode:  cfg.AutomationNode,
 			ChatModel:       chatModel,
 			AutomationModel: automationModel,
 		})

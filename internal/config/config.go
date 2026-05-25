@@ -1,20 +1,29 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
 )
 
+// LLMNode describes a single llm-service backend node parsed from the
+// LLM_NODES environment variable.
+type LLMNode struct {
+	Name string
+	URL  string
+}
+
 type Config struct {
-	DatabaseURL   string
-	Port          string
-	LogLevel      string
-	LlamaURL      string
-	// LLMNodes is an optional comma-separated list of llm-service node URLs,
-	// e.g. "http://node1:8080,http://node2:8080".  When set it takes
-	// precedence over LlamaURL for inference requests.
-	LLMNodes      []string
+	DatabaseURL string
+	Port        string
+	LogLevel    string
+	LlamaURL    string
+	// LLMNodes is an optional list of llm-service nodes.  When set it takes
+	// precedence over LlamaURL for inference requests.  Entries are parsed
+	// from LLM_NODES; each entry may be either a bare URL (auto-named
+	// "node-N") or "name=url" (e.g. "papai=http://192.168.0.172:5301").
+	LLMNodes      []LLMNode
 	AgentMaxSteps int
 	// APIKey, when set, enables X-API-Key authentication on all API endpoints
 	// except /health and /metrics.
@@ -22,6 +31,14 @@ type Config struct {
 	// MCPEndpoint, when set, enables the MCP tool runner and routes tool calls
 	// to the given Model Context Protocol server URL.
 	MCPEndpoint string
+	// ChatNode pins all chat runs to the named node from LLMNodes.  Replaces
+	// the previous CHAT_MODEL string-matching approach.  Empty means use the
+	// model-based registry pick.
+	ChatNode string
+	// AutomationNode is the default node for automation runs that arrive
+	// without an explicit model preference.  Empty means use the model-based
+	// registry pick.
+	AutomationNode string
 }
 
 func Load() *Config {
@@ -35,22 +52,39 @@ func Load() *Config {
 			maxSteps = n
 		}
 	}
-	var llmNodes []string
+	var llmNodes []LLMNode
 	if v := os.Getenv("LLM_NODES"); v != "" {
+		idx := 1
 		for _, raw := range strings.Split(v, ",") {
-			if u := strings.TrimSpace(raw); u != "" {
-				llmNodes = append(llmNodes, u)
+			entry := strings.TrimSpace(raw)
+			if entry == "" {
+				continue
 			}
+			name, url := "", entry
+			if eq := strings.Index(entry, "="); eq > 0 {
+				name = strings.TrimSpace(entry[:eq])
+				url = strings.TrimSpace(entry[eq+1:])
+			}
+			if url == "" {
+				continue
+			}
+			if name == "" {
+				name = fmt.Sprintf("node-%d", idx)
+			}
+			llmNodes = append(llmNodes, LLMNode{Name: name, URL: url})
+			idx++
 		}
 	}
 	return &Config{
-		DatabaseURL:   os.Getenv("DATABASE_URL"),
-		Port:          port,
-		LogLevel:      os.Getenv("LOG_LEVEL"),
-		LlamaURL:      os.Getenv("LLAMA_URL"),
-		LLMNodes:      llmNodes,
-		AgentMaxSteps: maxSteps,
-		APIKey:        os.Getenv("API_KEY"),
-		MCPEndpoint:   os.Getenv("MCP_ENDPOINT"),
+		DatabaseURL:    os.Getenv("DATABASE_URL"),
+		Port:           port,
+		LogLevel:       os.Getenv("LOG_LEVEL"),
+		LlamaURL:       os.Getenv("LLAMA_URL"),
+		LLMNodes:       llmNodes,
+		AgentMaxSteps:  maxSteps,
+		APIKey:         os.Getenv("API_KEY"),
+		MCPEndpoint:    os.Getenv("MCP_ENDPOINT"),
+		ChatNode:       os.Getenv("CHAT_NODE"),
+		AutomationNode: os.Getenv("AUTOMATION_NODE"),
 	}
 }

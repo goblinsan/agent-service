@@ -36,9 +36,9 @@ func NewPool(reg *Registry, newNode func(url string) model.Provider) *Pool {
 
 // Complete implements model.Provider.
 func (p *Pool) Complete(ctx context.Context, req model.Request) (*model.Response, error) {
-	node := p.registry.Pick(req.Model, req.EstimatedPromptTokens, req.MaxTokens)
+	node := p.pickNode(req)
 	if node == nil {
-		return nil, fmt.Errorf("registry pool: no healthy node available for model %q", req.Model)
+		return nil, fmt.Errorf("registry pool: no healthy node available for %s", routeDesc(req))
 	}
 	prov := p.provider(node.URL)
 	resp, err := prov.Complete(ctx, req)
@@ -52,9 +52,9 @@ func (p *Pool) Complete(ctx context.Context, req model.Request) (*model.Response
 
 // Stream implements model.Provider.
 func (p *Pool) Stream(ctx context.Context, req model.Request, onChunk func(string) error) error {
-	node := p.registry.Pick(req.Model, req.EstimatedPromptTokens, req.MaxTokens)
+	node := p.pickNode(req)
 	if node == nil {
-		return fmt.Errorf("registry pool: no healthy node available for model %q", req.Model)
+		return fmt.Errorf("registry pool: no healthy node available for %s", routeDesc(req))
 	}
 	prov := p.provider(node.URL)
 	err := prov.Stream(ctx, req, onChunk)
@@ -64,6 +64,24 @@ func (p *Pool) Stream(ctx context.Context, req model.Request, onChunk func(strin
 	}
 	p.registry.MarkHealthy(node.URL)
 	return nil
+}
+
+// pickNode returns the target node for req.  When req.BackendNode is set the
+// pool routes to that named node (no fallback — explicit pinning by the
+// caller is honoured strictly so misconfiguration surfaces as a clear error).
+// Otherwise it falls back to model-based selection.
+func (p *Pool) pickNode(req model.Request) *NodeConfig {
+	if req.BackendNode != "" {
+		return p.registry.PickByName(req.BackendNode)
+	}
+	return p.registry.Pick(req.Model, req.EstimatedPromptTokens, req.MaxTokens)
+}
+
+func routeDesc(req model.Request) string {
+	if req.BackendNode != "" {
+		return fmt.Sprintf("node %q", req.BackendNode)
+	}
+	return fmt.Sprintf("model %q", req.Model)
 }
 
 // provider returns the cached provider for url, creating it on first access.

@@ -194,6 +194,7 @@ func (s *Service) StartChatRun(ctx context.Context, req *ChatRunRequest, w http.
 		Prompt:       prompt,
 		Status:       "created",
 		ModelBackend: modelBackend,
+		BackendNode:  s.chatNode,
 		RequestID:    req.RequestID,
 		ThreadID:     req.ThreadID,
 		UserID:       req.UserID,
@@ -256,10 +257,19 @@ func (s *Service) StartGatewayRun(ctx context.Context, req *GatewayRunRequest, w
 		source = string(store.RunSourceAutomation)
 	}
 	modelBackend := req.Model
-	if source == string(store.RunSourceChat) && s.chatModel != "" {
-		modelBackend = s.chatModel
-	} else if source == string(store.RunSourceAutomation) && modelBackend == "" && s.automationModel != "" {
-		modelBackend = s.automationModel
+	backendNode := ""
+	if source == string(store.RunSourceChat) {
+		backendNode = s.chatNode
+		if s.chatModel != "" {
+			modelBackend = s.chatModel
+		}
+	} else {
+		if modelBackend == "" && s.automationModel != "" {
+			modelBackend = s.automationModel
+		}
+		if modelBackend == "" {
+			backendNode = s.automationNode
+		}
 	}
 	run := &store.Run{
 		ID:           newID(),
@@ -268,6 +278,7 @@ func (s *Service) StartGatewayRun(ctx context.Context, req *GatewayRunRequest, w
 		Prompt:       derivePrompt(req.Messages, ""),
 		Status:       "created",
 		ModelBackend: modelBackend,
+		BackendNode:  backendNode,
 		ThreadID:     req.ThreadID,
 		UserID:       req.UserID,
 		AgentID:      req.AgentID,
@@ -333,6 +344,7 @@ func (s *Service) StartChatRunSync(ctx context.Context, req *ChatRunRequest, w h
 		Prompt:       prompt,
 		Status:       "created",
 		ModelBackend: modelBackend,
+		BackendNode:  s.chatNode,
 		RequestID:    req.RequestID,
 		ThreadID:     req.ThreadID,
 		UserID:       req.UserID,
@@ -392,6 +404,11 @@ func (s *Service) StartAutomationRun(ctx context.Context, req *AutomationRunRequ
 	if modelBackend == "" && s.automationModel != "" {
 		modelBackend = s.automationModel
 	}
+	backendNode := ""
+	if modelBackend == "" {
+		// No explicit model preference — pin to the configured automation node.
+		backendNode = s.automationNode
+	}
 
 	initialMessages := buildAutomationMessages(req)
 	run := &store.Run{
@@ -401,6 +418,7 @@ func (s *Service) StartAutomationRun(ctx context.Context, req *AutomationRunRequ
 		Prompt:       derivePrompt(initialMessages, req.Prompt),
 		Status:       "created",
 		ModelBackend: modelBackend,
+		BackendNode:  backendNode,
 		RequestID:    req.RequestID,
 		ThreadID:     req.ThreadID,
 		UserID:       req.UserID,

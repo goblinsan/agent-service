@@ -96,6 +96,7 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 	for i := 1; i <= a.maxSteps; i++ {
 		resp, err := a.provider.Complete(ctx, model.Request{
 			Model:                 run.ModelBackend,
+			BackendNode:           run.BackendNode,
 			Messages:              messages,
 			MaxTokens:             512,
 			EstimatedPromptTokens: estimatePromptTokens(messages),

@@ -43,6 +43,11 @@ type Request struct {
 	// the OpenAI-compatible "tools" array. Providers that do not support tool
 	// calling should ignore this field.
 	Tools []ToolSpec
+	// BackendNode, when non-empty, pins the request to a specific registered
+	// llm-service node by its configured Name (e.g. "papai"). Multi-node
+	// pools should prefer this over Model-based selection.  Single-node
+	// providers may ignore it.
+	BackendNode string
 }
 
 // ToolSpec is the static advertisement of a callable function tool sent to the

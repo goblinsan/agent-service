@@ -57,6 +57,11 @@ type Run struct {
 
 	// ModelBackend is the name of the model backend selected for this run.
 	ModelBackend string
+	// BackendNode, when non-empty, pins the run to a specific registered
+	// llm-service node by name (e.g. "papai").  Takes precedence over
+	// ModelBackend in multi-node Pools.  Persisted as a transient field
+	// only; not currently stored in the database.
+	BackendNode string
 	// ToolCalls holds every tool invocation made during the run.
 	ToolCalls []RunToolCall
 	// ApprovalRecs records the human-approval outcomes for the run.

@@ -97,6 +97,35 @@ func (r *Registry) Pick(model string, estimatedPromptTokens int, requestedMaxTok
 	return nil
 }
 
+// PickByName returns the configuration of the named node when it is healthy
+// (after the same cooldown re-enable behaviour as Pick).  Returns nil when
+// the name is unknown or the node is unhealthy and still cooling down.
+// PickByName ignores model/capacity filters: callers using node-based routing
+// have already decided which node is appropriate.
+func (r *Registry) PickByName(name string) *NodeConfig {
+	if name == "" {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	for _, n := range r.nodes {
+		if n.config.Name != name {
+			continue
+		}
+		if !n.healthy {
+			if !n.lastFailure.IsZero() && now.Sub(n.lastFailure) >= nodeRetryCooldown {
+				n.healthy = true
+			} else {
+				return nil
+			}
+		}
+		c := n.config
+		return &c
+	}
+	return nil
+}
+
 // MarkFailed records a failure for the node at the given URL and marks it as
 // unhealthy so it will be skipped by subsequent Pick calls.
 func (r *Registry) MarkFailed(url string) {
