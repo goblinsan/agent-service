@@ -1,0 +1,104 @@
+package service_test
+
+import (
+	"context"
+	"sync"
+
+	"github.com/goblinsan/agent-service/internal/store"
+)
+
+// In-memory user state for tests that want to verify memory injection.
+type mockUserState struct {
+	mu       sync.Mutex
+	users    map[string]string
+	memories map[string]map[string]store.UserMemory
+	events   map[string][]store.UserEvent
+	plans    map[string]map[string]store.UserPlan
+}
+
+var mockUsers = &mockUserState{
+	users:    map[string]string{},
+	memories: map[string]map[string]store.UserMemory{},
+	events:   map[string][]store.UserEvent{},
+	plans:    map[string]map[string]store.UserPlan{},
+}
+
+func (m *mockStore) EnsureUser(_ context.Context, id, displayName string) error {
+	mockUsers.mu.Lock()
+	defer mockUsers.mu.Unlock()
+	if _, ok := mockUsers.users[id]; !ok {
+		name := displayName
+		if name == "" {
+			name = id
+		}
+		mockUsers.users[id] = name
+	}
+	return nil
+}
+
+func (m *mockStore) ListUserMemories(_ context.Context, userID string) ([]store.UserMemory, error) {
+	mockUsers.mu.Lock()
+	defer mockUsers.mu.Unlock()
+	bucket := mockUsers.memories[userID]
+	out := make([]store.UserMemory, 0, len(bucket))
+	for _, v := range bucket {
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+func (m *mockStore) UpsertUserMemory(_ context.Context, userID, key, value string, confidence float64) error {
+	mockUsers.mu.Lock()
+	defer mockUsers.mu.Unlock()
+	if mockUsers.memories[userID] == nil {
+		mockUsers.memories[userID] = map[string]store.UserMemory{}
+	}
+	mockUsers.memories[userID][key] = store.UserMemory{Key: key, Value: value, Confidence: confidence}
+	return nil
+}
+
+func (m *mockStore) AppendUserEvent(_ context.Context, evt *store.UserEvent) error {
+	mockUsers.mu.Lock()
+	defer mockUsers.mu.Unlock()
+	mockUsers.events[evt.UserID] = append(mockUsers.events[evt.UserID], *evt)
+	return nil
+}
+
+func (m *mockStore) ListRecentUserEvents(_ context.Context, userID string, limit int) ([]store.UserEvent, error) {
+	mockUsers.mu.Lock()
+	defer mockUsers.mu.Unlock()
+	all := mockUsers.events[userID]
+	if limit <= 0 || limit > len(all) {
+		limit = len(all)
+	}
+	// Most recent first.
+	out := make([]store.UserEvent, 0, limit)
+	for i := len(all) - 1; i >= 0 && len(out) < limit; i-- {
+		out = append(out, all[i])
+	}
+	return out, nil
+}
+
+func (m *mockStore) UpsertUserPlan(_ context.Context, p *store.UserPlan) error {
+	mockUsers.mu.Lock()
+	defer mockUsers.mu.Unlock()
+	if mockUsers.plans[p.UserID] == nil {
+		mockUsers.plans[p.UserID] = map[string]store.UserPlan{}
+	}
+	mockUsers.plans[p.UserID][p.ID] = *p
+	return nil
+}
+
+func (m *mockStore) ListActivePlans(_ context.Context, userID string) ([]store.UserPlan, error) {
+	mockUsers.mu.Lock()
+	defer mockUsers.mu.Unlock()
+	bucket := mockUsers.plans[userID]
+	out := make([]store.UserPlan, 0, len(bucket))
+	for _, v := range bucket {
+		if v.Status == "done" || v.Status == "abandoned" {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}

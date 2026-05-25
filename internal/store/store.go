@@ -92,6 +92,42 @@ type RunStep struct {
 	CreatedAt time.Time
 }
 
+// UserMemory is a durable per-user key/value fact surfaced to the model on each
+// turn. Confidence is informational (1.0 = stated by user, lower for inferred).
+type UserMemory struct {
+	Key        string
+	Value      string
+	Confidence float64
+	UpdatedAt  time.Time
+}
+
+// UserEvent is an append-only log entry describing something the user did or
+// said. Kind is a coarse label (e.g. "chat", "tool", "plan"). Source identifies
+// the producer (e.g. "chat-platform", "agent-service").
+type UserEvent struct {
+	ID        int64
+	UserID    string
+	SessionID string
+	Kind      string
+	Source    string
+	Summary   string
+	Payload   map[string]any
+	CreatedAt time.Time
+}
+
+// UserPlan is a durable goal/plan attached to a user, with optional structured
+// steps. Status is a free-form label ("draft", "active", "done", "abandoned").
+type UserPlan struct {
+	ID        string
+	UserID    string
+	Title     string
+	Status    string
+	Summary   string
+	Steps     []map[string]any
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type Store interface {
 	CreateSession(ctx context.Context, s *Session) error
 	GetSession(ctx context.Context, id string) (*Session, error)
@@ -100,4 +136,13 @@ type Store interface {
 	UpdateRun(ctx context.Context, r *Run) error
 	CreateStep(ctx context.Context, step *RunStep) error
 	ListSteps(ctx context.Context, runID string) ([]*RunStep, error)
+
+	// Per-user identity, memory, event log, and plans.
+	EnsureUser(ctx context.Context, id, displayName string) error
+	ListUserMemories(ctx context.Context, userID string) ([]UserMemory, error)
+	UpsertUserMemory(ctx context.Context, userID, key, value string, confidence float64) error
+	AppendUserEvent(ctx context.Context, evt *UserEvent) error
+	ListRecentUserEvents(ctx context.Context, userID string, limit int) ([]UserEvent, error)
+	UpsertUserPlan(ctx context.Context, p *UserPlan) error
+	ListActivePlans(ctx context.Context, userID string) ([]UserPlan, error)
 }

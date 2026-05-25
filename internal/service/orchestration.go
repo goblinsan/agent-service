@@ -176,6 +176,7 @@ func (s *Service) StartChatRun(ctx context.Context, req *ChatRunRequest, w http.
 	// Derive a prompt string for the run record while preserving the full message
 	// history for the model call itself.
 	initialMessages := buildChatMessages(req)
+	initialMessages = s.prependUserContext(ctx, req.UserID, initialMessages)
 	prompt := derivePrompt(initialMessages, req.SystemPrompt)
 
 	modelBackend := ""
@@ -276,7 +277,8 @@ func (s *Service) StartGatewayRun(ctx context.Context, req *GatewayRunRequest, w
 	}
 	dw := &discardResponseWriter{}
 	start := time.Now()
-	if err := s.agent.RunWithMessages(ctx, run, dw, nil, req.Messages); err != nil {
+	messagesWithContext := s.prependUserContext(ctx, req.UserID, req.Messages)
+	if err := s.agent.RunWithMessages(ctx, run, dw, nil, messagesWithContext); err != nil {
 		run.Status = "failed"
 		run.UpdatedAt = time.Now().UTC()
 		_ = s.store.UpdateRun(ctx, run)
@@ -304,6 +306,7 @@ func (s *Service) StartGatewayRun(ctx context.Context, req *GatewayRunRequest, w
 // returns a single JSON response instead of streaming SSE events.
 func (s *Service) StartChatRunSync(ctx context.Context, req *ChatRunRequest, w http.ResponseWriter) error {
 	initialMessages := buildChatMessages(req)
+	initialMessages = s.prependUserContext(ctx, req.UserID, initialMessages)
 	prompt := derivePrompt(initialMessages, req.SystemPrompt)
 
 	modelBackend := ""
