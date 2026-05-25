@@ -67,6 +67,15 @@ func (p *Postgres) CreateRun(ctx context.Context, r *Run) error {
 	var sessionID *string
 	if r.SessionID != "" {
 		sessionID = &r.SessionID
+		// Auto-create a placeholder session row when callers (e.g.
+		// gateway-chat-platform) pass a thread_id without first POSTing
+		// /sessions, so the runs.session_id FK is always satisfied.
+		if _, err := p.db.ExecContext(ctx,
+			`INSERT INTO sessions (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`,
+			r.SessionID, "auto",
+		); err != nil {
+			return err
+		}
 	}
 
 	_, err = p.db.ExecContext(ctx,
