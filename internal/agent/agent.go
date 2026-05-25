@@ -112,6 +112,14 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 			"tool_calls", len(resp.ToolCalls),
 			"content_len", len(resp.Content),
 		)
+		for _, tc := range resp.ToolCalls {
+			slog.Info("agent tool call",
+				"run_id", run.ID,
+				"step", i,
+				"tool", tc.Name,
+				"params", tc.Params,
+			)
+		}
 		run.Usage.PromptTokens += resp.Usage.PromptTokens
 		run.Usage.CompletionTokens += resp.Usage.CompletionTokens
 		run.Usage.TotalTokens += resp.Usage.TotalTokens
