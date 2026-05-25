@@ -92,13 +92,19 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 		ctx = tools.WithUserID(ctx, run.UserID)
 	}
 
+	// accumulated collects assistant content across continuation turns. When the
+	// model hits its max-token cap (finish_reason="length") it returns a partial
+	// response; we ask it to continue (see below) and stitch the partials back
+	// together so callers see one coherent assistant response.
+	var accumulated strings.Builder
+
 	// Steps are 1-based to align with human-readable step numbers in traces and SSE events.
 	for i := 1; i <= a.maxSteps; i++ {
 		resp, err := a.provider.Complete(ctx, model.Request{
 			Model:                 run.ModelBackend,
 			BackendNode:           run.BackendNode,
 			Messages:              messages,
-			MaxTokens:             512,
+			MaxTokens:             8192,
 			EstimatedPromptTokens: estimatePromptTokens(messages),
 			Tools:                 a.toolSpecs,
 		})
@@ -184,12 +190,17 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 				})
 			}
 			// Continue to the next step to let the model process tool results.
+			// Tool results break any in-flight continuation, so reset the accumulator
+			// so the post-tool assistant reply is treated as a fresh response.
+			accumulated.Reset()
 			continue
 		}
 
 		// No tool calls – check for termination.
 		if resp.FinishReason == "stop" || i == a.maxSteps {
-			for _, chunk := range chunkAssistantContent(resp.Content) {
+			accumulated.WriteString(resp.Content)
+			finalContent := accumulated.String()
+			for _, chunk := range chunkAssistantContent(finalContent) {
 				if err := sse.Write(w, sse.Event{
 					Type: sse.EventRunAssistantDelta,
 					Data: sse.AssistantDeltaPayload{RunID: run.ID, Delta: chunk},
@@ -197,11 +208,22 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 					return err
 				}
 			}
-			run.Response = resp.Content
+			run.Response = finalContent
 			break
 		}
 
+		// Non-terminal finish with no tool calls — most commonly finish_reason="length"
+		// (model hit the per-request token cap mid-response). We accumulate the partial,
+		// append it to the message history, and inject a synthetic user "continue" turn
+		// so the next iteration's prompt does NOT end in two consecutive assistant
+		// messages — llama.cpp's OpenAI-compatible endpoint rejects that with a 400
+		// ("Cannot have 2 or more assistant messages at the end of the list.").
+		accumulated.WriteString(resp.Content)
 		messages = append(messages, model.Message{Role: model.RoleAssistant, Content: resp.Content})
+		messages = append(messages, model.Message{
+			Role:    model.RoleUser,
+			Content: "Continue your previous response from exactly where you left off. Do not repeat any text you have already written.",
+		})
 	}
 
 	return nil
