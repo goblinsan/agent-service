@@ -39,6 +39,18 @@ type Request struct {
 	// the input messages, used for routing decisions in multi-node pools.
 	EstimatedPromptTokens int
 	Stream                bool
+	// Tools, when non-empty, advertises callable function tools to the model in
+	// the OpenAI-compatible "tools" array. Providers that do not support tool
+	// calling should ignore this field.
+	Tools []ToolSpec
+}
+
+// ToolSpec is the static advertisement of a callable function tool sent to the
+// model. Parameters is a JSON Schema object describing the tool's arguments.
+type ToolSpec struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Parameters  map[string]any `json:"parameters,omitempty"`
 }
 
 type Response struct {

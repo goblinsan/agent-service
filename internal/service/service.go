@@ -28,6 +28,9 @@ type ServiceOptions struct {
 	// Metrics, when non-nil, receives run-level counters (tool calls, approvals,
 	// backend selections, and latency) as each run completes.
 	Metrics *metrics.Metrics
+	// ToolSpecs is the static list of tools advertised to the model on every
+	// completion request. Should match the tools registered with Runner.
+	ToolSpecs []model.ToolSpec
 }
 
 type Service struct {
@@ -51,6 +54,7 @@ func NewWithOptions(s store.Store, p model.Provider, maxSteps int, opts ServiceO
 			Runner:    opts.Runner,
 			Policy:    opts.Policy,
 			Approvals: approvals,
+			ToolSpecs: opts.ToolSpecs,
 		}),
 		approvals: approvals,
 		metrics:   opts.Metrics,

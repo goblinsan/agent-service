@@ -22,6 +22,7 @@ import (
 	agentrunner "github.com/goblinsan/agent-service/internal/runner"
 	"github.com/goblinsan/agent-service/internal/service"
 	"github.com/goblinsan/agent-service/internal/store"
+	"github.com/goblinsan/agent-service/internal/tools"
 )
 
 func main() {
@@ -68,16 +69,52 @@ func main() {
 
 	m := &metrics.Metrics{}
 
+	// Build the native tool registry. Memory tools take pg so they can read and
+	// write per-user durable facts; the user identity comes from run context, not
+	// from model-supplied parameters.
+	reg := tools.NewRegistry()
+	localTZ := os.Getenv("OPERATOR_TIMEZONE")
+	if localTZ == "" {
+		localTZ = "America/New_York"
+	}
+	if err := reg.Register(&tools.TimeNowTool{Location: localTZ}); err != nil {
+		slog.Warn("register time_now", "error", err)
+	}
+	if err := reg.Register(&tools.MemoryRecallTool{Store: pg}); err != nil {
+		slog.Warn("register memory_recall", "error", err)
+	}
+	if err := reg.Register(&tools.MemoryWriteTool{Store: pg}); err != nil {
+		slog.Warn("register memory_write", "error", err)
+	}
+
+	nativeRunner := agentrunner.NewNativeRunner(reg)
+	toolDefs := reg.List()
+	toolSpecs := make([]model.ToolSpec, len(toolDefs))
+	for i, def := range toolDefs {
+		toolSpecs[i] = model.ToolSpec{
+			Name:        def.Name,
+			Description: def.Description,
+			Parameters:  tools.JSONSchema(def),
+		}
+	}
+	slog.Info("native tool registry built", "tools", len(toolSpecs))
+
 	var svc *service.Service
 	if cfg.MCPEndpoint != "" {
+		// MCP runner takes precedence when configured; native tools are still
+		// advertised so the LLM knows about local helpers like time_now even
+		// when MCP is supplying remote tools.
 		svc = service.NewWithOptions(pg, provider, cfg.AgentMaxSteps, service.ServiceOptions{
-			Runner:  agentrunner.NewMCPRunner(cfg.MCPEndpoint, nil),
-			Metrics: m,
+			Runner:    agentrunner.NewMCPRunner(cfg.MCPEndpoint, nil),
+			Metrics:   m,
+			ToolSpecs: toolSpecs,
 		})
 		slog.Info("MCP runner configured", "endpoint", cfg.MCPEndpoint)
 	} else {
 		svc = service.NewWithOptions(pg, provider, cfg.AgentMaxSteps, service.ServiceOptions{
-			Metrics: m,
+			Runner:    nativeRunner,
+			Metrics:   m,
+			ToolSpecs: toolSpecs,
 		})
 	}
 

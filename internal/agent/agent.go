@@ -14,6 +14,7 @@ import (
 	"github.com/goblinsan/agent-service/internal/runner"
 	"github.com/goblinsan/agent-service/internal/sse"
 	"github.com/goblinsan/agent-service/internal/store"
+	"github.com/goblinsan/agent-service/internal/tools"
 )
 
 // Options configures optional capabilities of an Agent.
@@ -26,6 +27,10 @@ type Options struct {
 	// Approvals is the approval store used for tool calls that require human
 	// review. When nil, RequireApproval decisions are treated as denials.
 	Approvals *policy.Approvals
+	// ToolSpecs is the static list of tools advertised to the model on every
+	// completion request. When empty, no tools are advertised (the model will
+	// not emit tool calls).
+	ToolSpecs []model.ToolSpec
 }
 
 type Agent struct {
@@ -35,6 +40,7 @@ type Agent struct {
 	runner    runner.Runner
 	policy    policy.Policy
 	approvals *policy.Approvals
+	toolSpecs []model.ToolSpec
 }
 
 // New returns an Agent with default options (no runner, no policy, no approvals).
@@ -54,6 +60,7 @@ func NewWithOptions(p model.Provider, s store.Store, maxSteps int, opts Options)
 		runner:    opts.Runner,
 		policy:    opts.Policy,
 		approvals: opts.Approvals,
+		toolSpecs: opts.ToolSpecs,
 	}
 }
 
@@ -77,6 +84,13 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 		}
 	}
 
+	// Bind the authenticated user_id onto the context so tools (memory_*, plan_*)
+	// can read it via tools.UserIDFromContext. The model never sees user_id as a
+	// parameter, so it cannot spoof another user's identity.
+	if run.UserID != "" {
+		ctx = tools.WithUserID(ctx, run.UserID)
+	}
+
 	// Steps are 1-based to align with human-readable step numbers in traces and SSE events.
 	for i := 1; i <= a.maxSteps; i++ {
 		resp, err := a.provider.Complete(ctx, model.Request{
@@ -84,6 +98,7 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 			Messages:              messages,
 			MaxTokens:             512,
 			EstimatedPromptTokens: estimatePromptTokens(messages),
+			Tools:                 a.toolSpecs,
 		})
 		if err != nil {
 			return fmt.Errorf("agent step %d: %w", i, err)

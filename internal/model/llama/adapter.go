@@ -33,6 +33,42 @@ type chatRequest struct {
 	Messages  []llamaRequestMsg `json:"messages"`
 	MaxTokens int               `json:"max_tokens"`
 	Stream    bool              `json:"stream"`
+	Tools     []llamaToolDef    `json:"tools,omitempty"`
+}
+
+// llamaToolDef is the OpenAI-compatible function/tool advertisement format.
+type llamaToolDef struct {
+	Type     string             `json:"type"` // always "function"
+	Function llamaToolDefBody   `json:"function"`
+}
+
+type llamaToolDefBody struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Parameters  map[string]any `json:"parameters,omitempty"`
+}
+
+func toRequestTools(specs []model.ToolSpec) []llamaToolDef {
+	if len(specs) == 0 {
+		return nil
+	}
+	out := make([]llamaToolDef, len(specs))
+	for i, s := range specs {
+		params := s.Parameters
+		if params == nil {
+			// llama-server requires an object schema; emit an empty object.
+			params = map[string]any{"type": "object", "properties": map[string]any{}}
+		}
+		out[i] = llamaToolDef{
+			Type: "function",
+			Function: llamaToolDefBody{
+				Name:        s.Name,
+				Description: s.Description,
+				Parameters:  params,
+			},
+		}
+	}
+	return out
 }
 
 // llamaRequestMsg is the OpenAI-compatible message format used in requests.
@@ -143,6 +179,7 @@ func (a *Adapter) Complete(ctx context.Context, req model.Request) (*model.Respo
 		Messages:  msgs,
 		MaxTokens: req.MaxTokens,
 		Stream:    false,
+		Tools:     toRequestTools(req.Tools),
 	})
 	if err != nil {
 		return nil, err
@@ -220,6 +257,7 @@ func (a *Adapter) Stream(ctx context.Context, req model.Request, onChunk func(ch
 		Messages:  msgs,
 		MaxTokens: req.MaxTokens,
 		Stream:    true,
+		Tools:     toRequestTools(req.Tools),
 	})
 	if err != nil {
 		return err
