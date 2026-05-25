@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -131,6 +132,18 @@ func (t *PlanUpsertTool) Execute(ctx context.Context, params map[string]any) (an
 func normalizePlanSteps(v any) ([]map[string]any, error) {
 	if v == nil {
 		return nil, nil
+	}
+	// Some models pass arrays as JSON-encoded strings. Decode first.
+	if s, ok := v.(string); ok {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil, nil
+		}
+		var decoded any
+		if err := json.Unmarshal([]byte(s), &decoded); err != nil {
+			return nil, fmt.Errorf("steps string is not valid JSON: %w", err)
+		}
+		v = decoded
 	}
 	raw, ok := v.([]any)
 	if !ok {

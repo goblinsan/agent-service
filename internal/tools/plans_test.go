@@ -128,3 +128,19 @@ func TestPlanUpsertRejectsMalformedSteps(t *testing.T) {
 		t.Error("expected error for non-object step item")
 	}
 }
+
+func TestPlanUpsertAcceptsStepsAsJSONString(t *testing.T) {
+	fs := &fakePlanStore{}
+	tool := &PlanUpsertTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+	_, err := tool.Execute(ctx, map[string]any{
+		"title": "x",
+		"steps": `[{"title":"a","status":"todo"},{"title":"b","status":"done"}]`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fs.upserts[0].Steps) != 2 || fs.upserts[0].Steps[0]["title"] != "a" {
+		t.Errorf("steps not decoded: %+v", fs.upserts[0].Steps)
+	}
+}
