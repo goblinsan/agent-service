@@ -16,7 +16,7 @@ type TimeNowTool struct {
 func (t *TimeNowTool) Definition() Tool {
 	return Tool{
 		Name:        "time_now",
-		Description: "Returns the current date and time in UTC and the operator's local timezone. Call this whenever the user asks for the current time, date, day of week, or anything time-sensitive.",
+		Description: "Returns the current date and time in UTC and the operator's local timezone, plus whether today is a US federal holiday. Call this whenever the user asks for the current time, date, day of week, or anything time-sensitive — and consult is_us_federal_holiday / us_federal_holiday before assuming today is a normal working day.",
 	}
 }
 
@@ -30,15 +30,24 @@ func (t *TimeNowTool) Execute(_ context.Context, _ map[string]any) (any, error) 
 	if loc == "" {
 		loc = "UTC"
 	}
+	var localForHoliday time.Time
 	if l, err := time.LoadLocation(loc); err == nil {
 		local := now.In(l)
+		localForHoliday = local
 		out["local"] = local.Format("2006-01-02 15:04:05 MST")
 		out["local_timezone"] = loc
 		out["weekday"] = local.Weekday().String()
 	} else {
+		localForHoliday = now
 		out["local"] = now.Format("2006-01-02 15:04:05 MST")
 		out["local_timezone"] = "UTC"
 		out["weekday"] = now.Weekday().String()
+	}
+	if name := USFederalHoliday(localForHoliday); name != "" {
+		out["is_us_federal_holiday"] = true
+		out["us_federal_holiday"] = name
+	} else {
+		out["is_us_federal_holiday"] = false
 	}
 	return out, nil
 }
