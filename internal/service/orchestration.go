@@ -183,6 +183,9 @@ func (s *Service) StartChatRun(ctx context.Context, req *ChatRunRequest, w http.
 	if req.ModelPreferences != nil {
 		modelBackend = req.ModelPreferences.Preferred
 	}
+	if s.chatModel != "" {
+		modelBackend = s.chatModel
+	}
 
 	run := &store.Run{
 		ID:           newID(),
@@ -252,13 +255,19 @@ func (s *Service) StartGatewayRun(ctx context.Context, req *GatewayRunRequest, w
 	if req.WorkflowID != "" || req.DeliveryMode != "" || req.ChannelID != "" {
 		source = string(store.RunSourceAutomation)
 	}
+	modelBackend := req.Model
+	if source == string(store.RunSourceChat) && s.chatModel != "" {
+		modelBackend = s.chatModel
+	} else if source == string(store.RunSourceAutomation) && modelBackend == "" && s.automationModel != "" {
+		modelBackend = s.automationModel
+	}
 	run := &store.Run{
 		ID:           newID(),
 		SessionID:    req.ThreadID,
 		Source:       source,
 		Prompt:       derivePrompt(req.Messages, ""),
 		Status:       "created",
-		ModelBackend: req.Model,
+		ModelBackend: modelBackend,
 		ThreadID:     req.ThreadID,
 		UserID:       req.UserID,
 		AgentID:      req.AgentID,
@@ -312,6 +321,9 @@ func (s *Service) StartChatRunSync(ctx context.Context, req *ChatRunRequest, w h
 	modelBackend := ""
 	if req.ModelPreferences != nil {
 		modelBackend = req.ModelPreferences.Preferred
+	}
+	if s.chatModel != "" {
+		modelBackend = s.chatModel
 	}
 
 	run := &store.Run{
@@ -376,6 +388,9 @@ func (s *Service) StartAutomationRun(ctx context.Context, req *AutomationRunRequ
 	modelBackend := ""
 	if req.ModelPreferences != nil {
 		modelBackend = req.ModelPreferences.Preferred
+	}
+	if modelBackend == "" && s.automationModel != "" {
+		modelBackend = s.automationModel
 	}
 
 	initialMessages := buildAutomationMessages(req)

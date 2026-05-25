@@ -114,22 +114,35 @@ func main() {
 	}
 	slog.Info("native tool registry built", "tools", len(toolSpecs))
 
+	chatModel := os.Getenv("CHAT_MODEL")
+	automationModel := os.Getenv("AUTOMATION_MODEL")
+	if chatModel != "" {
+		slog.Info("chat model override configured", "model", chatModel)
+	}
+	if automationModel != "" {
+		slog.Info("automation model default configured", "model", automationModel)
+	}
+
 	var svc *service.Service
 	if cfg.MCPEndpoint != "" {
 		// MCP runner takes precedence when configured; native tools are still
 		// advertised so the LLM knows about local helpers like time_now even
 		// when MCP is supplying remote tools.
 		svc = service.NewWithOptions(pg, provider, cfg.AgentMaxSteps, service.ServiceOptions{
-			Runner:    agentrunner.NewMCPRunner(cfg.MCPEndpoint, nil),
-			Metrics:   m,
-			ToolSpecs: toolSpecs,
+			Runner:          agentrunner.NewMCPRunner(cfg.MCPEndpoint, nil),
+			Metrics:         m,
+			ToolSpecs:       toolSpecs,
+			ChatModel:       chatModel,
+			AutomationModel: automationModel,
 		})
 		slog.Info("MCP runner configured", "endpoint", cfg.MCPEndpoint)
 	} else {
 		svc = service.NewWithOptions(pg, provider, cfg.AgentMaxSteps, service.ServiceOptions{
-			Runner:    nativeRunner,
-			Metrics:   m,
-			ToolSpecs: toolSpecs,
+			Runner:          nativeRunner,
+			Metrics:         m,
+			ToolSpecs:       toolSpecs,
+			ChatModel:       chatModel,
+			AutomationModel: automationModel,
 		})
 	}
 

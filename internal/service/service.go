@@ -31,13 +31,24 @@ type ServiceOptions struct {
 	// ToolSpecs is the static list of tools advertised to the model on every
 	// completion request. Should match the tools registered with Runner.
 	ToolSpecs []model.ToolSpec
+	// ChatModel, when non-empty, FORCES every chat run to use this model
+	// regardless of the client's model preference. Set this to pin chat to a
+	// single strong model (e.g. the 14B on papai). Leave empty to honour the
+	// client's preference.
+	ChatModel string
+	// AutomationModel, when non-empty, is used as the default for automation
+	// runs that arrive without an explicit model preference. It does NOT
+	// override an explicit preference.
+	AutomationModel string
 }
 
 type Service struct {
-	store     store.Store
-	agent     *agent.Agent
-	approvals *policy.Approvals
-	metrics   *metrics.Metrics
+	store           store.Store
+	agent           *agent.Agent
+	approvals       *policy.Approvals
+	metrics         *metrics.Metrics
+	chatModel       string
+	automationModel string
 }
 
 // New returns a Service with default options (no runner, no base policy).
@@ -56,8 +67,10 @@ func NewWithOptions(s store.Store, p model.Provider, maxSteps int, opts ServiceO
 			Approvals: approvals,
 			ToolSpecs: opts.ToolSpecs,
 		}),
-		approvals: approvals,
-		metrics:   opts.Metrics,
+		approvals:       approvals,
+		metrics:         opts.Metrics,
+		chatModel:       opts.ChatModel,
+		automationModel: opts.AutomationModel,
 	}
 }
 
