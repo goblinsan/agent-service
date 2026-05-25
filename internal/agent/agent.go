@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -103,6 +104,14 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 		if err != nil {
 			return fmt.Errorf("agent step %d: %w", i, err)
 		}
+		slog.Info("agent step",
+			"run_id", run.ID,
+			"step", i,
+			"advertised_tools", len(a.toolSpecs),
+			"finish_reason", resp.FinishReason,
+			"tool_calls", len(resp.ToolCalls),
+			"content_len", len(resp.Content),
+		)
 		run.Usage.PromptTokens += resp.Usage.PromptTokens
 		run.Usage.CompletionTokens += resp.Usage.CompletionTokens
 		run.Usage.TotalTokens += resp.Usage.TotalTokens
