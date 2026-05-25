@@ -68,6 +68,7 @@ func (s *Service) ensureUserAndContext(ctx context.Context, userID string) []mod
 		}
 	}
 	b.WriteString("\nUse these facts and events when relevant. If the user states a new durable preference or biographical fact, call memory_write. Append significant turns to the event log via memory tools where appropriate.")
+	b.WriteString("\nYour training data is stale. For any question about current events, recent scores, prices, releases, news, or anything that could have changed in the last year, you MUST call web_search before answering and cite the URL it returns. Do not answer such questions from memory.")
 
 	return []model.Message{{Role: model.RoleSystem, Content: b.String()}}
 }
