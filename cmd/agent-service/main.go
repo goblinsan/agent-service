@@ -86,6 +86,15 @@ func main() {
 	if err := reg.Register(&tools.MemoryWriteTool{Store: pg}); err != nil {
 		slog.Warn("register memory_write", "error", err)
 	}
+	if braveKey := os.Getenv("BRAVE_SEARCH_API_KEY"); braveKey != "" {
+		if err := reg.Register(&tools.WebSearchTool{APIKey: braveKey}); err != nil {
+			slog.Warn("register web_search", "error", err)
+		} else {
+			slog.Info("web_search tool enabled (brave search)")
+		}
+	} else {
+		slog.Info("web_search tool disabled: BRAVE_SEARCH_API_KEY not set")
+	}
 
 	nativeRunner := agentrunner.NewNativeRunner(reg)
 	toolDefs := reg.List()
