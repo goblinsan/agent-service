@@ -1,0 +1,81 @@
+package tools
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/goblinsan/agent-service/internal/store"
+)
+
+type fakeScheduleStore struct {
+	created *store.ScheduledJob
+}
+
+func (f *fakeScheduleStore) CreateScheduledJob(_ context.Context, job *store.ScheduledJob) error {
+	copy := *job
+	f.created = &copy
+	return nil
+}
+
+func TestScheduleCreateToolUsesDelayAndRunContextDefaults(t *testing.T) {
+	st := &fakeScheduleStore{}
+	tool := &ScheduleCreateTool{Store: st}
+	ctx := WithUserID(context.Background(), "alice")
+	ctx = WithRunMetadata(ctx, "thread-1", "agent-1")
+
+	before := time.Now().UTC()
+	out, err := tool.Execute(ctx, map[string]any{
+		"prompt":        "Remind me to breathe.",
+		"delay_seconds": 60,
+	})
+	after := time.Now().UTC()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if st.created == nil {
+		t.Fatal("expected schedule to be created")
+	}
+	if st.created.UserID != "alice" || st.created.ThreadID != "thread-1" || st.created.AgentID != "agent-1" {
+		t.Fatalf("unexpected created job: %+v", st.created)
+	}
+	if st.created.RunAt.Before(before.Add(59*time.Second)) || st.created.RunAt.After(after.Add(61*time.Second)) {
+		t.Fatalf("unexpected run_at: %s", st.created.RunAt)
+	}
+	result, ok := out.(map[string]any)
+	if !ok || result["status"] != "ok" {
+		t.Fatalf("unexpected tool result: %#v", out)
+	}
+}
+
+func TestScheduleCreateToolAcceptsAbsoluteRunAt(t *testing.T) {
+	st := &fakeScheduleStore{}
+	tool := &ScheduleCreateTool{Store: st}
+	ctx := WithUserID(context.Background(), "alice")
+
+	runAt := "2026-05-26T16:30:00Z"
+	_, err := tool.Execute(ctx, map[string]any{
+		"prompt": "Check the laundry.",
+		"run_at": runAt,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if st.created == nil {
+		t.Fatal("expected schedule to be created")
+	}
+	if got := st.created.RunAt.Format(time.RFC3339); got != runAt {
+		t.Fatalf("expected run_at %s, got %s", runAt, got)
+	}
+}
+
+func TestScheduleCreateToolRequiresTiming(t *testing.T) {
+	st := &fakeScheduleStore{}
+	tool := &ScheduleCreateTool{Store: st}
+	ctx := WithUserID(context.Background(), "alice")
+
+	_, err := tool.Execute(ctx, map[string]any{"prompt": "Hello"})
+	if err == nil {
+		t.Fatal("expected error when no timing supplied")
+	}
+}

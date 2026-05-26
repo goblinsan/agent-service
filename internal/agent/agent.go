@@ -91,6 +91,7 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 	if run.UserID != "" {
 		ctx = tools.WithUserID(ctx, run.UserID)
 	}
+	ctx = tools.WithRunMetadata(ctx, run.ThreadID, run.AgentID)
 
 	// accumulated collects assistant content across continuation turns. When the
 	// model hits its max-token cap (finish_reason="length") it returns a partial

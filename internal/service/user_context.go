@@ -70,6 +70,7 @@ func (s *Service) ensureUserAndContext(ctx context.Context, userID string) []mod
 	}
 	b.WriteString("\nUse these facts and events when relevant. If the user states a new durable preference or biographical fact, call memory_write. Append significant turns to the event log via memory tools where appropriate.")
 	b.WriteString("\nGoals and plans: when the user states a new goal, commitment, or multi-step intent (e.g. \"I want to...\", \"help me track...\", \"my plan is...\"), call plan_upsert to record it. Call plan_list before creating a new plan to avoid duplicates and to recall existing plan ids. When the user reports progress on an existing plan, update it via plan_upsert with the same id and a revised steps array. Mark plans 'done' when finished or 'abandoned' when dropped.")
+	b.WriteString("\nReminders and delayed follow-ups: when the user asks to be reminded later or wants something to happen at a future time, call create_schedule. Prefer delay_seconds for relative times like 'in 1 minute'. Do not use memory_write as a substitute for reminders.")
 	return []model.Message{{Role: model.RoleSystem, Content: b.String()}}
 }
 
