@@ -408,6 +408,21 @@ func TestStartAutomationRun_SyncMode_ReturnsStructuredOutput(t *testing.T) {
 	assert.Equal(t, "Voltage Mirage", storedStructured["name"])
 }
 
+func TestEffectiveAutomationToolPolicy_DeniesCreateScheduleForReminderJobs(t *testing.T) {
+	spec := service.EffectiveAutomationToolPolicyForTest(&service.AutomationRunRequest{
+		JobType: "reminder",
+		ToolPolicy: &service.ToolPolicySpec{
+			AllowedTools:    []string{"create_schedule", "memory_write"},
+			RequireApproval: []string{"file"},
+		},
+	})
+
+	require.NotNil(t, spec)
+	assert.Contains(t, spec.DeniedTools, "create_schedule")
+	assert.Contains(t, spec.AllowedTools, "create_schedule")
+	assert.Contains(t, spec.RequireApproval, "file")
+}
+
 // ---------------------------------------------------------------------------
 // StartKulrsPaletteRun
 // ---------------------------------------------------------------------------

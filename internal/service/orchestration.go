@@ -413,6 +413,7 @@ func (s *Service) StartAutomationRun(ctx context.Context, req *AutomationRunRequ
 	}
 
 	initialMessages := buildAutomationMessages(req)
+	runPolicy := buildRunPolicy(effectiveAutomationToolPolicy(req))
 	run := &store.Run{
 		ID:           newID(),
 		SessionID:    req.ThreadID,
@@ -435,9 +436,9 @@ func (s *Service) StartAutomationRun(ctx context.Context, req *AutomationRunRequ
 	}
 
 	if req.ResponseMode == "stream" {
-		return s.streamAutomationRun(ctx, run, w, initialMessages, buildRunPolicy(req.ToolPolicy))
+		return s.streamAutomationRun(ctx, run, w, initialMessages, runPolicy)
 	}
-	return s.syncAutomationRun(ctx, run, w, initialMessages, buildRunPolicy(req.ToolPolicy), req.ResultFormat)
+	return s.syncAutomationRun(ctx, run, w, initialMessages, runPolicy, req.ResultFormat)
 }
 
 // streamAutomationRun runs an automation request and emits SSE events to w.
@@ -826,6 +827,36 @@ func buildAutomationMessages(req *AutomationRunRequest) []model.Message {
 	return append(messages, model.Message{Role: model.RoleUser, Content: strings.TrimSpace(userContent)})
 }
 
+func effectiveAutomationToolPolicy(req *AutomationRunRequest) *ToolPolicySpec {
+	if req == nil {
+		return nil
+	}
+
+	var spec ToolPolicySpec
+	if req.ToolPolicy != nil {
+		spec = ToolPolicySpec{
+			AllowedTools:    append([]string(nil), req.ToolPolicy.AllowedTools...),
+			RequireApproval: append([]string(nil), req.ToolPolicy.RequireApproval...),
+			DeniedTools:     append([]string(nil), req.ToolPolicy.DeniedTools...),
+		}
+	}
+
+	if strings.EqualFold(strings.TrimSpace(req.JobType), "reminder") {
+		spec.DeniedTools = appendUniqueStrings(spec.DeniedTools, "create_schedule")
+	}
+
+	if len(spec.AllowedTools) == 0 && len(spec.RequireApproval) == 0 && len(spec.DeniedTools) == 0 {
+		return nil
+	}
+	return &spec
+}
+
+// EffectiveAutomationToolPolicyForTest exposes the automation-policy expansion
+// logic to black-box tests without widening the runtime API surface.
+func EffectiveAutomationToolPolicyForTest(req *AutomationRunRequest) *ToolPolicySpec {
+	return effectiveAutomationToolPolicy(req)
+}
+
 func derivePrompt(messages []model.Message, fallback string) string {
 	prompt := fallback
 	for _, m := range messages {
@@ -846,6 +877,21 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func appendUniqueStrings(values []string, extras ...string) []string {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		seen[value] = struct{}{}
+	}
+	for _, extra := range extras {
+		if _, ok := seen[extra]; ok {
+			continue
+		}
+		values = append(values, extra)
+		seen[extra] = struct{}{}
+	}
+	return values
 }
 
 func preferredModel(prefs *ModelPreferences) string {
