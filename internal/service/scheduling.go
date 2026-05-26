@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http/httptest"
 	"time"
 
@@ -40,7 +41,15 @@ func (s *Service) DeleteNotification(ctx context.Context, userID, notificationID
 }
 
 func (s *Service) CreateNotification(ctx context.Context, n *store.Notification) error {
-	return s.store.CreateNotification(ctx, n)
+	if err := s.store.CreateNotification(ctx, n); err != nil {
+		return err
+	}
+	if s.notifier != nil {
+		if err := s.notifier.DispatchNotification(ctx, *n); err != nil {
+			slog.Warn("notification fanout failed", "user_id", n.UserID, "notification_id", n.ID, "error", err)
+		}
+	}
+	return nil
 }
 
 func (s *Service) UpsertDeviceToken(ctx context.Context, token *store.DeviceToken) error {

@@ -106,7 +106,7 @@ func (w *Worker) runJob(ctx context.Context, job store.ScheduledJob) {
 }
 
 func (w *Worker) emitNotification(ctx context.Context, n store.Notification) error {
-	if err := w.store.CreateNotification(ctx, &n); err != nil {
+	if err := w.service.CreateNotification(ctx, &n); err != nil {
 		slog.Error("notification create failed", "user_id", n.UserID, "error", err)
 		return err
 	}

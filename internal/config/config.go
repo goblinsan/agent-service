@@ -44,6 +44,14 @@ type Config struct {
 	SchedulerEnabled bool
 	// SchedulerPollInterval controls how often due jobs are scanned.
 	SchedulerPollInterval time.Duration
+	// APNSEnabled enables APNs dispatch for newly created notifications.
+	APNSEnabled bool
+	// APNS credentials and delivery settings.
+	APNSTeamID  string
+	APNSKeyID   string
+	APNSAuthKey string
+	APNSTopic   string
+	APNSEnv     string
 }
 
 func Load() *Config {
@@ -66,6 +74,14 @@ func Load() *Config {
 	schedulerEnabled := false
 	if v := strings.TrimSpace(strings.ToLower(os.Getenv("SCHEDULER_ENABLED"))); v == "1" || v == "true" || v == "yes" {
 		schedulerEnabled = true
+	}
+	apnsEnabled := false
+	if v := strings.TrimSpace(strings.ToLower(os.Getenv("APNS_ENABLED"))); v == "1" || v == "true" || v == "yes" {
+		apnsEnabled = true
+	}
+	apnsEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APNS_ENV")))
+	if apnsEnv == "" {
+		apnsEnv = "production"
 	}
 	var llmNodes []LLMNode
 	if v := os.Getenv("LLM_NODES"); v != "" {
@@ -103,5 +119,11 @@ func Load() *Config {
 		AutomationNode:        os.Getenv("AUTOMATION_NODE"),
 		SchedulerEnabled:      schedulerEnabled,
 		SchedulerPollInterval: pollInterval,
+		APNSEnabled:           apnsEnabled,
+		APNSTeamID:            strings.TrimSpace(os.Getenv("APNS_TEAM_ID")),
+		APNSKeyID:             strings.TrimSpace(os.Getenv("APNS_KEY_ID")),
+		APNSAuthKey:           os.Getenv("APNS_AUTH_KEY"),
+		APNSTopic:             strings.TrimSpace(os.Getenv("APNS_TOPIC")),
+		APNSEnv:               apnsEnv,
 	}
 }

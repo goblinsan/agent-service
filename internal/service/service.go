@@ -45,6 +45,14 @@ type ServiceOptions struct {
 	// kept only for backward compatibility.  Prefer ChatNode/AutomationNode.
 	ChatModel       string
 	AutomationModel string
+	// NotificationDispatcher, when non-nil, is called after a notification row
+	// is persisted so external channels (for example APNs) can be fanned out.
+	NotificationDispatcher NotificationDispatcher
+}
+
+// NotificationDispatcher fan-outs persisted notifications to external channels.
+type NotificationDispatcher interface {
+	DispatchNotification(ctx context.Context, n store.Notification) error
 }
 
 type Service struct {
@@ -57,6 +65,7 @@ type Service struct {
 	automationNode  string
 	chatModel       string
 	automationModel string
+	notifier        NotificationDispatcher
 }
 
 // ChatNode returns the current chat-routing node name (may be empty).
@@ -125,6 +134,7 @@ func NewWithOptions(s store.Store, p model.Provider, maxSteps int, opts ServiceO
 		automationNode:  opts.AutomationNode,
 		chatModel:       opts.ChatModel,
 		automationModel: opts.AutomationModel,
+		notifier:        opts.NotificationDispatcher,
 	}
 }
 

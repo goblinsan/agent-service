@@ -19,6 +19,7 @@ import (
 	"github.com/goblinsan/agent-service/internal/model"
 	"github.com/goblinsan/agent-service/internal/model/llama"
 	"github.com/goblinsan/agent-service/internal/model/registry"
+	"github.com/goblinsan/agent-service/internal/push"
 	agentrunner "github.com/goblinsan/agent-service/internal/runner"
 	"github.com/goblinsan/agent-service/internal/scheduler"
 	"github.com/goblinsan/agent-service/internal/service"
@@ -119,6 +120,23 @@ func main() {
 
 	chatModel := os.Getenv("CHAT_MODEL")
 	automationModel := os.Getenv("AUTOMATION_MODEL")
+	var notifier service.NotificationDispatcher
+	apnsDispatcher, err := push.NewAPNSDispatcher(pg, push.APNSConfig{
+		Enabled: cfg.APNSEnabled,
+		TeamID:  cfg.APNSTeamID,
+		KeyID:   cfg.APNSKeyID,
+		AuthKey: cfg.APNSAuthKey,
+		Topic:   cfg.APNSTopic,
+		Env:     cfg.APNSEnv,
+	})
+	if err != nil {
+		slog.Warn("APNs dispatcher disabled", "error", err)
+	} else if apnsDispatcher != nil {
+		notifier = apnsDispatcher
+		slog.Info("APNs dispatcher enabled", "env", cfg.APNSEnv, "topic", cfg.APNSTopic)
+	} else {
+		slog.Info("APNs dispatcher disabled")
+	}
 	if cfg.ChatNode != "" {
 		slog.Info("chat node configured", "node", cfg.ChatNode)
 	}
@@ -138,24 +156,26 @@ func main() {
 		// advertised so the LLM knows about local helpers like time_now even
 		// when MCP is supplying remote tools.
 		svc = service.NewWithOptions(pg, provider, cfg.AgentMaxSteps, service.ServiceOptions{
-			Runner:          agentrunner.NewMCPRunner(cfg.MCPEndpoint, nil),
-			Metrics:         m,
-			ToolSpecs:       toolSpecs,
-			ChatNode:        cfg.ChatNode,
-			AutomationNode:  cfg.AutomationNode,
-			ChatModel:       chatModel,
-			AutomationModel: automationModel,
+			Runner:                 agentrunner.NewMCPRunner(cfg.MCPEndpoint, nil),
+			Metrics:                m,
+			ToolSpecs:              toolSpecs,
+			ChatNode:               cfg.ChatNode,
+			AutomationNode:         cfg.AutomationNode,
+			ChatModel:              chatModel,
+			AutomationModel:        automationModel,
+			NotificationDispatcher: notifier,
 		})
 		slog.Info("MCP runner configured", "endpoint", cfg.MCPEndpoint)
 	} else {
 		svc = service.NewWithOptions(pg, provider, cfg.AgentMaxSteps, service.ServiceOptions{
-			Runner:          nativeRunner,
-			Metrics:         m,
-			ToolSpecs:       toolSpecs,
-			ChatNode:        cfg.ChatNode,
-			AutomationNode:  cfg.AutomationNode,
-			ChatModel:       chatModel,
-			AutomationModel: automationModel,
+			Runner:                 nativeRunner,
+			Metrics:                m,
+			ToolSpecs:              toolSpecs,
+			ChatNode:               cfg.ChatNode,
+			AutomationNode:         cfg.AutomationNode,
+			ChatModel:              chatModel,
+			AutomationModel:        automationModel,
+			NotificationDispatcher: notifier,
 		})
 	}
 
