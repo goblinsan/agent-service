@@ -410,7 +410,8 @@ func (p *Postgres) GetThreadForUser(ctx context.Context, userID, threadID string
 
 // DeleteThreadForUser removes a thread and its runs, scoped to the requesting
 // user.  Returns ErrNotFound when the thread does not belong to the user.
-// Relies on the ON DELETE CASCADE from runs.session_id to clean up runs.
+// Older databases may still have dependent run_steps rows without cascade
+// cleanup, so this delete is performed explicitly in dependency order.
 func (p *Postgres) DeleteThreadForUser(ctx context.Context, userID, threadID string) error {
 	var ownedRuns int
 	if err := p.db.QueryRowContext(ctx,
@@ -422,8 +423,37 @@ func (p *Postgres) DeleteThreadForUser(ctx context.Context, userID, threadID str
 	if ownedRuns == 0 {
 		return ErrNotFound
 	}
-	_, err := p.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1`, threadID)
-	return err
+
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM run_steps
+		WHERE run_id IN (
+			SELECT id FROM runs WHERE session_id = $1 AND user_id = $2
+		)`,
+		threadID, userID,
+	); err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM runs WHERE session_id = $1 AND user_id = $2`,
+		threadID, userID,
+	); err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1`, threadID); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 // RenameThreadForUser updates the session.name (thread title), scoped to the
