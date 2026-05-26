@@ -144,3 +144,63 @@ func TestPlanUpsertAcceptsStepsAsJSONString(t *testing.T) {
 		t.Errorf("steps not decoded: %+v", fs.upserts[0].Steps)
 	}
 }
+
+func TestPlanIngestTextDerivesTitleSummaryAndSteps(t *testing.T) {
+	fs := &fakePlanStore{}
+	tool := &PlanIngestTextTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+
+	res, err := tool.Execute(ctx, map[string]any{
+		"text":   "# Launch project manager loop\n\nCoordinate the recurring check-in workflow.\n\n- [ ] Add recurring schedules\n- [x] Fix push delivery\n- Doing: wire goal updates",
+		"source": "External PM",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := res.(map[string]any)
+	if m["created"] != true {
+		t.Errorf("expected created=true, got %v", m["created"])
+	}
+	if len(fs.upserts) != 1 {
+		t.Fatalf("expected 1 upsert, got %d", len(fs.upserts))
+	}
+	plan := fs.upserts[0]
+	if plan.Title != "Launch project manager loop" {
+		t.Errorf("unexpected title %q", plan.Title)
+	}
+	if !strings.Contains(plan.Summary, "Coordinate the recurring check-in workflow.") {
+		t.Errorf("unexpected summary %q", plan.Summary)
+	}
+	if !strings.Contains(plan.Summary, "Imported from External PM.") {
+		t.Errorf("expected source marker in summary, got %q", plan.Summary)
+	}
+	if len(plan.Steps) != 3 {
+		t.Fatalf("expected 3 steps, got %d", len(plan.Steps))
+	}
+	if plan.Steps[0]["status"] != "todo" || plan.Steps[1]["status"] != "done" || plan.Steps[2]["status"] != "doing" {
+		t.Errorf("unexpected step statuses: %+v", plan.Steps)
+	}
+}
+
+func TestPlanIngestTextUsesExistingIDWhenProvided(t *testing.T) {
+	fs := &fakePlanStore{}
+	tool := &PlanIngestTextTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+
+	res, err := tool.Execute(ctx, map[string]any{
+		"id":    "plan-123",
+		"title": "Imported roadmap",
+		"text":  "Imported roadmap\n\n- Step one",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res.(map[string]any)["created"] != false {
+		t.Error("expected created=false when id provided")
+	}
+	if got := fs.upserts[0].ID; got != "plan-123" {
+		t.Errorf("expected plan id plan-123, got %q", got)
+	}
+}

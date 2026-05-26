@@ -59,6 +59,21 @@ func (s *Service) ensureUserAndContext(ctx context.Context, userID string) []mod
 				summary = p.Status
 			}
 			fmt.Fprintf(&b, "- [%s] %s — %s\n", p.Status, p.Title, summary)
+			for i, step := range p.Steps {
+				if i >= 5 {
+					fmt.Fprintf(&b, "  - ... %d more step(s)\n", len(p.Steps)-i)
+					break
+				}
+				stepTitle, _ := step["title"].(string)
+				stepStatus, _ := step["status"].(string)
+				if strings.TrimSpace(stepTitle) == "" {
+					continue
+				}
+				if stepStatus == "" {
+					stepStatus = "todo"
+				}
+				fmt.Fprintf(&b, "  - (%s) %s\n", stepStatus, stepTitle)
+			}
 		}
 	}
 	if len(events) > 0 {
@@ -70,6 +85,8 @@ func (s *Service) ensureUserAndContext(ctx context.Context, userID string) []mod
 	}
 	b.WriteString("\nUse these facts and events when relevant. If the user states a new durable preference or biographical fact, call memory_write. Append significant turns to the event log via memory tools where appropriate.")
 	b.WriteString("\nGoals and plans: when the user states a new goal, commitment, or multi-step intent (e.g. \"I want to...\", \"help me track...\", \"my plan is...\"), call plan_upsert to record it. Call plan_list before creating a new plan to avoid duplicates and to recall existing plan ids. When the user reports progress on an existing plan, update it via plan_upsert with the same id and a revised steps array. Mark plans 'done' when finished or 'abandoned' when dropped.")
+	b.WriteString("\nWhen the user asks for project-manager-style guidance, planning help, or a goal review, call plan_list early in the run so you are using the latest durable plan state instead of stale assumptions.")
+	b.WriteString("\nWhen the user pastes a plan, roadmap, or text document from another system and wants it tracked, call plan_ingest_text to convert that text into a durable plan before giving follow-up guidance.")
 	b.WriteString("\nReminders and delayed follow-ups: when the user asks to be reminded later or wants something to happen at a future time, call create_schedule. Prefer delay_seconds for relative times like 'in 1 minute'. Do not use memory_write as a substitute for reminders.")
 	return []model.Message{{Role: model.RoleSystem, Content: b.String()}}
 }
