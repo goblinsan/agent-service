@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -89,6 +90,22 @@ func NewRouterWithOptions(svc *service.Service, opts RouterOptions) http.Handler
 	r.Get("/internal/threads/{threadID}", getThreadHandler(svc))
 	r.Patch("/internal/threads/{threadID}", renameThreadHandler(svc))
 	r.Delete("/internal/threads/{threadID}", deleteThreadHandler(svc))
+
+	// Notifications inbox endpoints.
+	r.Get("/internal/notifications", listNotificationsHandler(svc))
+	r.Post("/internal/notifications", createNotificationHandler(svc))
+	r.Post("/internal/notifications/{id}/read", markNotificationReadHandler(svc))
+	r.Post("/internal/notifications/read-all", markAllNotificationsReadHandler(svc))
+	r.Delete("/internal/notifications/{id}", deleteNotificationHandler(svc))
+
+	// Scheduler endpoints.
+	r.Post("/internal/schedules", createScheduleHandler(svc))
+	r.Get("/internal/schedules", listSchedulesHandler(svc))
+	r.Delete("/internal/schedules/{id}", deleteScheduleHandler(svc))
+
+	// Push token registration endpoints.
+	r.Post("/internal/device-tokens", registerDeviceTokenHandler(svc))
+	r.Delete("/internal/device-tokens/{token}", unregisterDeviceTokenHandler(svc))
 
 	if opts.Registry != nil {
 		r.Get("/admin/routing", getRoutingHandler(svc, opts.Registry))
@@ -540,4 +557,337 @@ func deleteThreadHandler(svc *service.Service) http.HandlerFunc {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+func listNotificationsHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		limit := 100
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		unreadOnly := true
+		if raw := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("unread_only"))); raw != "" {
+			unreadOnly = raw == "true" || raw == "1" || raw == "yes"
+		}
+		notifications, err := svc.ListNotifications(r.Context(), userID, unreadOnly, limit)
+		if err != nil {
+			slog.Error("list notifications failed", "error", err, "user_id", userID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		if notifications == nil {
+			notifications = []store.Notification{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"notifications": notifications}); err != nil {
+			slog.Error("failed to encode notifications response", "error", err)
+		}
+	}
+}
+
+func createNotificationHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		var req struct {
+			Kind        string         `json:"kind"`
+			Title       string         `json:"title"`
+			Body        string         `json:"body"`
+			ThreadID    string         `json:"thread_id"`
+			SourceRunID string         `json:"source_run_id"`
+			Payload     map[string]any `json:"payload"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.Title) == "" {
+			http.Error(w, `{"error":"title is required"}`, http.StatusBadRequest)
+			return
+		}
+		n := &store.Notification{
+			ID:          newID(),
+			UserID:      userID,
+			Kind:        firstNonEmpty(strings.TrimSpace(req.Kind), "generic"),
+			Title:       strings.TrimSpace(req.Title),
+			Body:        strings.TrimSpace(req.Body),
+			ThreadID:    strings.TrimSpace(req.ThreadID),
+			SourceRunID: strings.TrimSpace(req.SourceRunID),
+			Payload:     req.Payload,
+		}
+		if err := svc.CreateNotification(r.Context(), n); err != nil {
+			slog.Error("create notification failed", "error", err, "user_id", userID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		if err := json.NewEncoder(w).Encode(n); err != nil {
+			slog.Error("failed to encode notification response", "error", err)
+		}
+	}
+}
+
+func markNotificationReadHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		id := strings.TrimSpace(chi.URLParam(r, "id"))
+		if id == "" {
+			http.Error(w, `{"error":"notification id is required"}`, http.StatusBadRequest)
+			return
+		}
+		if err := svc.MarkNotificationRead(r.Context(), userID, id); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				http.Error(w, `{"error":"notification not found"}`, http.StatusNotFound)
+				return
+			}
+			slog.Error("mark notification read failed", "error", err, "user_id", userID, "notification_id", id)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func markAllNotificationsReadHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		if err := svc.MarkAllNotificationsRead(r.Context(), userID); err != nil {
+			slog.Error("mark all notifications read failed", "error", err, "user_id", userID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func deleteNotificationHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		id := strings.TrimSpace(chi.URLParam(r, "id"))
+		if id == "" {
+			http.Error(w, `{"error":"notification id is required"}`, http.StatusBadRequest)
+			return
+		}
+		if err := svc.DeleteNotification(r.Context(), userID, id); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				http.Error(w, `{"error":"notification not found"}`, http.StatusNotFound)
+				return
+			}
+			slog.Error("delete notification failed", "error", err, "user_id", userID, "notification_id", id)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func createScheduleHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		var req struct {
+			Kind       string         `json:"kind"`
+			Prompt     string         `json:"prompt"`
+			ThreadID   string         `json:"thread_id"`
+			AgentID    string         `json:"agent_id"`
+			Payload    map[string]any `json:"payload"`
+			RunAt      string         `json:"run_at"`
+			Recurrence string         `json:"recurrence"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.Prompt) == "" {
+			http.Error(w, `{"error":"prompt is required"}`, http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.RunAt) == "" {
+			http.Error(w, `{"error":"run_at is required"}`, http.StatusBadRequest)
+			return
+		}
+		runAt, err := time.Parse(time.RFC3339, req.RunAt)
+		if err != nil {
+			http.Error(w, `{"error":"run_at must be RFC3339"}`, http.StatusBadRequest)
+			return
+		}
+		job := &store.ScheduledJob{
+			ID:         newID(),
+			UserID:     userID,
+			Kind:       firstNonEmpty(strings.TrimSpace(req.Kind), "prompt"),
+			Prompt:     strings.TrimSpace(req.Prompt),
+			ThreadID:   strings.TrimSpace(req.ThreadID),
+			AgentID:    strings.TrimSpace(req.AgentID),
+			Payload:    req.Payload,
+			RunAt:      runAt.UTC(),
+			Recurrence: strings.TrimSpace(req.Recurrence),
+			Status:     "pending",
+		}
+		if err := svc.CreateScheduledJob(r.Context(), job); err != nil {
+			slog.Error("create schedule failed", "error", err, "user_id", userID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		if err := json.NewEncoder(w).Encode(job); err != nil {
+			slog.Error("failed to encode schedule response", "error", err)
+		}
+	}
+}
+
+func listSchedulesHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		limit := 100
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		jobs, err := svc.ListScheduledJobs(r.Context(), userID, limit)
+		if err != nil {
+			slog.Error("list schedules failed", "error", err, "user_id", userID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		if jobs == nil {
+			jobs = []store.ScheduledJob{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"schedules": jobs}); err != nil {
+			slog.Error("failed to encode schedules response", "error", err)
+		}
+	}
+}
+
+func deleteScheduleHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		id := strings.TrimSpace(chi.URLParam(r, "id"))
+		if id == "" {
+			http.Error(w, `{"error":"schedule id is required"}`, http.StatusBadRequest)
+			return
+		}
+		if err := svc.DeleteScheduledJob(r.Context(), userID, id); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				http.Error(w, `{"error":"schedule not found"}`, http.StatusNotFound)
+				return
+			}
+			slog.Error("delete schedule failed", "error", err, "user_id", userID, "schedule_id", id)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func registerDeviceTokenHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		var req struct {
+			Platform   string `json:"platform"`
+			Token      string `json:"token"`
+			AppVersion string `json:"app_version"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.Token) == "" {
+			http.Error(w, `{"error":"token is required"}`, http.StatusBadRequest)
+			return
+		}
+		d := &store.DeviceToken{
+			ID:         newID(),
+			UserID:     userID,
+			Platform:   firstNonEmpty(strings.TrimSpace(req.Platform), "ios"),
+			Token:      strings.TrimSpace(req.Token),
+			AppVersion: strings.TrimSpace(req.AppVersion),
+			LastSeenAt: time.Now().UTC(),
+			CreatedAt:  time.Now().UTC(),
+		}
+		if err := svc.UpsertDeviceToken(r.Context(), d); err != nil {
+			slog.Error("register device token failed", "error", err, "user_id", userID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func unregisterDeviceTokenHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		token := strings.TrimSpace(chi.URLParam(r, "token"))
+		if token == "" {
+			http.Error(w, `{"error":"token is required"}`, http.StatusBadRequest)
+			return
+		}
+		if err := svc.DeleteDeviceToken(r.Context(), userID, token); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				http.Error(w, `{"error":"device token not found"}`, http.StatusNotFound)
+				return
+			}
+			slog.Error("delete device token failed", "error", err, "user_id", userID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func newID() string {
+	return strconv.FormatInt(time.Now().UTC().UnixNano(), 36)
 }

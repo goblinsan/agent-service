@@ -20,6 +20,7 @@ import (
 	"github.com/goblinsan/agent-service/internal/model/llama"
 	"github.com/goblinsan/agent-service/internal/model/registry"
 	agentrunner "github.com/goblinsan/agent-service/internal/runner"
+	"github.com/goblinsan/agent-service/internal/scheduler"
 	"github.com/goblinsan/agent-service/internal/service"
 	"github.com/goblinsan/agent-service/internal/store"
 	"github.com/goblinsan/agent-service/internal/tools"
@@ -195,6 +196,16 @@ func main() {
 		RoutingStore: pg,
 	})
 
+	rootCtx, cancelRoot := context.WithCancel(context.Background())
+	defer cancelRoot()
+	if cfg.SchedulerEnabled {
+		worker := scheduler.New(pg, svc, scheduler.WorkerConfig{PollInterval: cfg.SchedulerPollInterval})
+		go worker.Start(rootCtx)
+		slog.Info("scheduler enabled", "poll_interval", cfg.SchedulerPollInterval.String())
+	} else {
+		slog.Info("scheduler disabled")
+	}
+
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%s", cfg.Port),
 		Handler: router,
@@ -214,6 +225,7 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
+	cancelRoot()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

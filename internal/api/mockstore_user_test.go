@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"time"
 
 	"github.com/goblinsan/agent-service/internal/store"
 )
@@ -25,5 +26,31 @@ func (m *mockStore) ListRecentUserEvents(_ context.Context, _ string, _ int) ([]
 func (m *mockStore) UpsertUserPlan(_ context.Context, _ *store.UserPlan) error { return nil }
 
 func (m *mockStore) ListActivePlans(_ context.Context, _ string) ([]store.UserPlan, error) {
+	return nil, nil
+}
+
+func (m *mockStore) CreateNotification(_ context.Context, _ *store.Notification) error { return nil }
+func (m *mockStore) ListNotifications(_ context.Context, _ string, _ bool, _ int) ([]store.Notification, error) {
+	return nil, nil
+}
+func (m *mockStore) MarkNotificationRead(_ context.Context, _, _ string) error  { return nil }
+func (m *mockStore) MarkAllNotificationsRead(_ context.Context, _ string) error { return nil }
+func (m *mockStore) DeleteNotification(_ context.Context, _, _ string) error    { return nil }
+
+func (m *mockStore) CreateScheduledJob(_ context.Context, _ *store.ScheduledJob) error { return nil }
+func (m *mockStore) ListScheduledJobs(_ context.Context, _ string, _ int) ([]store.ScheduledJob, error) {
+	return nil, nil
+}
+func (m *mockStore) DeleteScheduledJob(_ context.Context, _, _ string) error { return nil }
+func (m *mockStore) AcquireDueScheduledJobs(_ context.Context, _ int, _ time.Duration) ([]store.ScheduledJob, error) {
+	return nil, nil
+}
+func (m *mockStore) MarkScheduledJobResult(_ context.Context, _, _ string, _ time.Time, _ *time.Time) error {
+	return nil
+}
+
+func (m *mockStore) UpsertDeviceToken(_ context.Context, _ *store.DeviceToken) error { return nil }
+func (m *mockStore) DeleteDeviceToken(_ context.Context, _, _ string) error          { return nil }
+func (m *mockStore) ListDeviceTokens(_ context.Context, _, _ string) ([]store.DeviceToken, error) {
 	return nil, nil
 }
