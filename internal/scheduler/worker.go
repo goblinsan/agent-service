@@ -76,9 +76,9 @@ func (w *Worker) runJob(ctx context.Context, job store.ScheduledJob) {
 			Title:     "Scheduled job failed",
 			Body:      trimMessage(err.Error(), 280),
 			ThreadID:  job.ThreadID,
-				Payload:   map[string]any{"scheduled_job_id": job.ID},
-				CreatedAt: now,
-			})
+			Payload:   map[string]any{"scheduled_job_id": job.ID},
+			CreatedAt: now,
+		})
 		status, nextRun := nextJobState(job, now, false)
 		_ = w.store.MarkScheduledJobResult(ctx, job.ID, status, now, nextRun)
 		return
@@ -88,11 +88,15 @@ func (w *Worker) runJob(ctx context.Context, job store.ScheduledJob) {
 	if body == "" {
 		body = "Scheduled work completed."
 	}
+	title := "Scheduled work completed"
+	if strings.EqualFold(strings.TrimSpace(job.Kind), "reminder") {
+		title = "Reminder"
+	}
 	_ = w.emitNotification(ctx, store.Notification{
 		ID:          newID(),
 		UserID:      job.UserID,
 		Kind:        "scheduled_job.completed",
-		Title:       "Scheduled work completed",
+		Title:       title,
 		Body:        body,
 		ThreadID:    job.ThreadID,
 		SourceRunID: result.RunID,
@@ -100,9 +104,9 @@ func (w *Worker) runJob(ctx context.Context, job store.ScheduledJob) {
 			"scheduled_job_id": job.ID,
 			"run_id":           result.RunID,
 			"status":           result.Status,
-			},
-			CreatedAt: now,
-		})
+		},
+		CreatedAt: now,
+	})
 	status, nextRun := nextJobState(job, now, true)
 	_ = w.store.MarkScheduledJobResult(ctx, job.ID, status, now, nextRun)
 }

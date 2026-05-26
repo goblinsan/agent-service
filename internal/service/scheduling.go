@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http/httptest"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/goblinsan/agent-service/internal/store"
 )
@@ -70,6 +73,9 @@ func (s *Service) RunScheduledJob(ctx context.Context, job store.ScheduledJob) (
 	if job.UserID == "" {
 		return nil, errors.New("scheduled job user_id is required")
 	}
+	if strings.EqualFold(strings.TrimSpace(job.Kind), "reminder") {
+		return s.runReminderJob(ctx, job)
+	}
 	req := &AutomationRunRequest{
 		RequestID:    fmt.Sprintf("schedule:%s:%d", job.ID, time.Now().UTC().Unix()),
 		Source:       "scheduler",
@@ -101,4 +107,63 @@ func (s *Service) RunScheduledJob(ctx context.Context, job store.ScheduledJob) (
 		return nil, err
 	}
 	return &result, nil
+}
+
+func (s *Service) runReminderJob(ctx context.Context, job store.ScheduledJob) (*AutomationRunResult, error) {
+	now := time.Now().UTC()
+	body := buildReminderBody(job.Prompt)
+	run := &store.Run{
+		ID:         newID(),
+		SessionID:  job.ThreadID,
+		Source:     string(store.RunSourceAutomation),
+		Prompt:     job.Prompt,
+		Status:     "completed",
+		Response:   body,
+		RequestID:  fmt.Sprintf("schedule:%s:%d", job.ID, now.Unix()),
+		ThreadID:   job.ThreadID,
+		UserID:     job.UserID,
+		AgentID:    job.AgentID,
+		WorkflowID: fmt.Sprintf("scheduled:%s", job.ID),
+		JobType:    firstNonEmpty(job.Kind, "scheduled_job"),
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := s.store.CreateRun(ctx, run); err != nil {
+		return nil, fmt.Errorf("create reminder run: %w", err)
+	}
+	return &AutomationRunResult{
+		RunID:  run.ID,
+		Status: "completed",
+		Output: body,
+	}, nil
+}
+
+func buildReminderBody(prompt string) string {
+	trimmed := strings.TrimSpace(prompt)
+	if trimmed == "" {
+		return "Reminder."
+	}
+	lower := strings.ToLower(trimmed)
+	switch {
+	case strings.HasPrefix(lower, "remind me to "):
+		trimmed = "Remember to " + strings.TrimSpace(trimmed[len("remind me to "):])
+	case strings.HasPrefix(lower, "remind me "):
+		trimmed = "Reminder: " + strings.TrimSpace(trimmed[len("remind me "):])
+	}
+	trimmed = sentenceCase(trimmed)
+	if !strings.HasSuffix(trimmed, ".") && !strings.HasSuffix(trimmed, "!") && !strings.HasSuffix(trimmed, "?") {
+		trimmed += "."
+	}
+	return trimmed
+}
+
+func sentenceCase(s string) string {
+	if s == "" {
+		return s
+	}
+	r, size := utf8.DecodeRuneInString(s)
+	if r == utf8.RuneError && size == 0 {
+		return s
+	}
+	return string(unicode.ToUpper(r)) + s[size:]
 }
