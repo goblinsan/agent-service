@@ -406,8 +406,10 @@ func (s *Service) StartAutomationRun(ctx context.Context, req *AutomationRunRequ
 	}
 	backendNode := ""
 	if modelBackend == "" {
-		// No explicit model preference — pin to the configured automation node.
-		backendNode = s.AutomationNode()
+		// No explicit model preference — pin to the configured automation node,
+		// but fall back to the chat node so scheduled jobs still run when
+		// automation-specific routing has not been configured yet.
+		backendNode = firstNonEmpty(s.AutomationNode(), s.ChatNode())
 	}
 
 	initialMessages := buildAutomationMessages(req)
