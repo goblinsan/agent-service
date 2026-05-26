@@ -76,10 +76,11 @@ func (w *Worker) runJob(ctx context.Context, job store.ScheduledJob) {
 			Title:     "Scheduled job failed",
 			Body:      trimMessage(err.Error(), 280),
 			ThreadID:  job.ThreadID,
-			Payload:   map[string]any{"scheduled_job_id": job.ID},
-			CreatedAt: now,
-		})
-		_ = w.store.MarkScheduledJobResult(ctx, job.ID, nextStatus(job.Recurrence), now, nextRunAt(job, now))
+				Payload:   map[string]any{"scheduled_job_id": job.ID},
+				CreatedAt: now,
+			})
+		status, nextRun := nextJobState(job, now, false)
+		_ = w.store.MarkScheduledJobResult(ctx, job.ID, status, now, nextRun)
 		return
 	}
 
@@ -99,10 +100,11 @@ func (w *Worker) runJob(ctx context.Context, job store.ScheduledJob) {
 			"scheduled_job_id": job.ID,
 			"run_id":           result.RunID,
 			"status":           result.Status,
-		},
-		CreatedAt: now,
-	})
-	_ = w.store.MarkScheduledJobResult(ctx, job.ID, nextStatus(job.Recurrence), now, nextRunAt(job, now))
+			},
+			CreatedAt: now,
+		})
+	status, nextRun := nextJobState(job, now, true)
+	_ = w.store.MarkScheduledJobResult(ctx, job.ID, status, now, nextRun)
 }
 
 func (w *Worker) emitNotification(ctx context.Context, n store.Notification) error {
@@ -113,22 +115,30 @@ func (w *Worker) emitNotification(ctx context.Context, n store.Notification) err
 	return nil
 }
 
-func nextStatus(recurrence string) string {
-	if strings.TrimSpace(recurrence) == "" {
-		return "completed"
-	}
-	return "pending"
-}
-
-func nextRunAt(job store.ScheduledJob, now time.Time) *time.Time {
+func nextJobState(job store.ScheduledJob, now time.Time, succeeded bool) (string, *time.Time) {
 	recurrence := strings.TrimSpace(job.Recurrence)
 	if recurrence == "" {
-		return nil
+		if succeeded {
+			return "completed", nil
+		}
+		return "failed", nil
+	}
+	next, err := nextRunAt(job, now)
+	if err != nil {
+		slog.Warn("scheduled job recurrence invalid; disabling job", "job_id", job.ID, "recurrence", recurrence, "error", err)
+		return "failed", nil
+	}
+	return "pending", next
+}
+
+func nextRunAt(job store.ScheduledJob, now time.Time) (*time.Time, error) {
+	recurrence := strings.TrimSpace(job.Recurrence)
+	if recurrence == "" {
+		return nil, nil
 	}
 	d, err := parseRecurrence(recurrence)
 	if err != nil {
-		slog.Warn("unsupported recurrence; falling back to one-shot", "job_id", job.ID, "recurrence", recurrence, "error", err)
-		return nil
+		return nil, err
 	}
 	next := job.RunAt
 	if next.IsZero() {
@@ -137,7 +147,7 @@ func nextRunAt(job store.ScheduledJob, now time.Time) *time.Time {
 	for !next.After(now) {
 		next = next.Add(d)
 	}
-	return &next
+	return &next, nil
 }
 
 func parseRecurrence(raw string) (time.Duration, error) {

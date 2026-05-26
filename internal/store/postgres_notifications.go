@@ -38,7 +38,8 @@ func (p *Postgres) ListNotifications(ctx context.Context, userID string, unreadO
 	}
 	query := `SELECT id, user_id, kind, title, COALESCE(body, ''), COALESCE(thread_id, ''), COALESCE(source_run_id, ''), payload, read_at, dismissed_at, created_at
 		 FROM notifications
-		 WHERE user_id = $1`
+		 WHERE user_id = $1
+		   AND dismissed_at IS NULL`
 	args := []any{userID}
 	if unreadOnly {
 		query += ` AND read_at IS NULL`
