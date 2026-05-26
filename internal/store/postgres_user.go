@@ -129,27 +129,71 @@ func (p *Postgres) UpsertUserPlan(ctx context.Context, plan *UserPlan) error {
 	if err != nil {
 		return err
 	}
+	tags := plan.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	tagsRaw, err := json.Marshal(tags)
+	if err != nil {
+		return err
+	}
+	dataSources := plan.DataSources
+	if dataSources == nil {
+		dataSources = []string{}
+	}
+	dataSourcesRaw, err := json.Marshal(dataSources)
+	if err != nil {
+		return err
+	}
+	metrics := plan.Metrics
+	if metrics == nil {
+		metrics = map[string]any{}
+	}
+	metricsRaw, err := json.Marshal(metrics)
+	if err != nil {
+		return err
+	}
 	status := plan.Status
 	if status == "" {
 		status = "draft"
 	}
 	_, err = p.db.ExecContext(ctx,
-		`INSERT INTO user_plans (id, user_id, title, status, summary, steps, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+		`INSERT INTO user_plans (
+		     id, user_id, title, status, category, tags, data_sources,
+		     review_cadence, summary, metrics, steps, created_at, updated_at
+		 )
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
 		 ON CONFLICT (id) DO UPDATE SET
 		   title = EXCLUDED.title,
 		   status = EXCLUDED.status,
+		   category = EXCLUDED.category,
+		   tags = EXCLUDED.tags,
+		   data_sources = EXCLUDED.data_sources,
+		   review_cadence = EXCLUDED.review_cadence,
 		   summary = EXCLUDED.summary,
+		   metrics = EXCLUDED.metrics,
 		   steps = EXCLUDED.steps,
 		   updated_at = NOW()`,
-		plan.ID, plan.UserID, plan.Title, status, nullableString(plan.Summary), string(stepsRaw),
+		plan.ID,
+		plan.UserID,
+		plan.Title,
+		status,
+		nullableString(plan.Category),
+		string(tagsRaw),
+		string(dataSourcesRaw),
+		nullableString(plan.ReviewCadence),
+		nullableString(plan.Summary),
+		string(metricsRaw),
+		string(stepsRaw),
 	)
 	return err
 }
 
 func (p *Postgres) ListActivePlans(ctx context.Context, userID string) ([]UserPlan, error) {
 	rows, err := p.db.QueryContext(ctx,
-		`SELECT id, user_id, title, status, COALESCE(summary, ''), steps, created_at, updated_at
+		`SELECT id, user_id, title, status, COALESCE(category, ''), tags, data_sources,
+		        COALESCE(review_cadence, ''), COALESCE(summary, ''), metrics, steps,
+		        created_at, updated_at
 		 FROM user_plans
 		 WHERE user_id = $1 AND status NOT IN ('done', 'abandoned')
 		 ORDER BY updated_at DESC`,
@@ -162,9 +206,41 @@ func (p *Postgres) ListActivePlans(ctx context.Context, userID string) ([]UserPl
 	var out []UserPlan
 	for rows.Next() {
 		var p UserPlan
+		var tagsRaw []byte
+		var dataSourcesRaw []byte
+		var metricsRaw []byte
 		var stepsRaw []byte
-		if err := rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Status, &p.Summary, &stepsRaw, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(
+			&p.ID,
+			&p.UserID,
+			&p.Title,
+			&p.Status,
+			&p.Category,
+			&tagsRaw,
+			&dataSourcesRaw,
+			&p.ReviewCadence,
+			&p.Summary,
+			&metricsRaw,
+			&stepsRaw,
+			&p.CreatedAt,
+			&p.UpdatedAt,
+		); err != nil {
 			return nil, err
+		}
+		if len(tagsRaw) > 0 {
+			if err := json.Unmarshal(tagsRaw, &p.Tags); err != nil {
+				return nil, err
+			}
+		}
+		if len(dataSourcesRaw) > 0 {
+			if err := json.Unmarshal(dataSourcesRaw, &p.DataSources); err != nil {
+				return nil, err
+			}
+		}
+		if len(metricsRaw) > 0 {
+			if err := json.Unmarshal(metricsRaw, &p.Metrics); err != nil {
+				return nil, err
+			}
 		}
 		if len(stepsRaw) > 0 {
 			if err := json.Unmarshal(stepsRaw, &p.Steps); err != nil {

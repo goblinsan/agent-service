@@ -123,14 +123,19 @@ type UserEvent struct {
 // UserPlan is a durable goal/plan attached to a user, with optional structured
 // steps. Status is a free-form label ("draft", "active", "done", "abandoned").
 type UserPlan struct {
-	ID        string
-	UserID    string
-	Title     string
-	Status    string
-	Summary   string
-	Steps     []map[string]any
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID            string
+	UserID        string
+	Title         string
+	Status        string
+	Category      string
+	Tags          []string
+	DataSources   []string
+	ReviewCadence string
+	Summary       string
+	Metrics       map[string]any
+	Steps         []map[string]any
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // ThreadSummary is a compact description of a chat thread (session) belonging

@@ -33,6 +33,11 @@ func (t *PlanIngestTextTool) Definition() Tool {
 			{Name: "title", Type: "string", Description: "Optional explicit plan title override. When omitted, the tool derives one from the document.", Required: false},
 			{Name: "id", Type: "string", Description: "Optional existing plan id from plan_list. Pass this to refresh an existing plan instead of creating a new one.", Required: false},
 			{Name: "status", Type: "string", Description: "Optional status override. Defaults to active.", Required: false},
+			{Name: "category", Type: "string", Description: "Optional plan category such as work, health, finance, or social.", Required: false},
+			{Name: "tags", Type: "array", Description: "Optional list of free-form tags for grouping and filtering.", Required: false},
+			{Name: "data_sources", Type: "array", Description: "Optional list of systems or apps this plan depends on.", Required: false},
+			{Name: "review_cadence", Type: "string", Description: "Optional review cadence such as daily, weekday-morning, or weekly.", Required: false},
+			{Name: "metrics", Type: "object", Description: "Optional structured metrics map associated with the imported plan.", Required: false},
 			{Name: "source", Type: "string", Description: "Optional source label, for example the upstream system or document name.", Required: false},
 		},
 	}
@@ -75,19 +80,43 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 	if status == "" {
 		status = "active"
 	}
+	category, _ := params["category"].(string)
+	category = strings.TrimSpace(category)
+	tags, err := normalizeStringList(params["tags"], "tags")
+	if err != nil {
+		return nil, err
+	}
+	dataSources, err := normalizeStringList(params["data_sources"], "data_sources")
+	if err != nil {
+		return nil, err
+	}
+	reviewCadence, _ := params["review_cadence"].(string)
+	reviewCadence = strings.TrimSpace(reviewCadence)
+	metrics, err := normalizeObject(params["metrics"], "metrics")
+	if err != nil {
+		return nil, err
+	}
 
 	source, _ := params["source"].(string)
 	source = strings.TrimSpace(source)
+	if source != "" && !containsString(dataSources, source) {
+		dataSources = append(dataSources, source)
+	}
 
 	summary := derivePlanSummary(rawText, title, source)
 	steps := derivePlanSteps(rawText)
 	plan := &store.UserPlan{
-		ID:      id,
-		UserID:  uid,
-		Title:   title,
-		Status:  status,
-		Summary: summary,
-		Steps:   steps,
+		ID:            id,
+		UserID:        uid,
+		Title:         title,
+		Status:        status,
+		Category:      category,
+		Tags:          tags,
+		DataSources:   dataSources,
+		ReviewCadence: reviewCadence,
+		Summary:       summary,
+		Metrics:       metrics,
+		Steps:         steps,
 	}
 	if err := t.Store.UpsertUserPlan(ctx, plan); err != nil {
 		return nil, fmt.Errorf("ingest plan: %w", err)
@@ -97,13 +126,18 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 		"status":  "ok",
 		"created": created,
 		"plan": map[string]any{
-			"id":         plan.ID,
-			"title":      plan.Title,
-			"status":     plan.Status,
-			"summary":    plan.Summary,
-			"steps":      plan.Steps,
-			"step_count": len(plan.Steps),
-			"source":     source,
+			"id":             plan.ID,
+			"title":          plan.Title,
+			"status":         plan.Status,
+			"category":       plan.Category,
+			"tags":           plan.Tags,
+			"data_sources":   plan.DataSources,
+			"review_cadence": plan.ReviewCadence,
+			"summary":        plan.Summary,
+			"metrics":        plan.Metrics,
+			"steps":          plan.Steps,
+			"step_count":     len(plan.Steps),
+			"source":         source,
 		},
 	}, nil
 }
@@ -245,4 +279,13 @@ func newIngestedPlanID() string {
 		return "plan-import-fallback"
 	}
 	return "plan-" + hex.EncodeToString(b[:])
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(target)) {
+			return true
+		}
+	}
+	return false
 }

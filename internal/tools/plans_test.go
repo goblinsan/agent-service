@@ -32,7 +32,17 @@ func (f *fakePlanStore) UpsertUserPlan(ctx context.Context, p *store.UserPlan) e
 }
 
 func TestPlanListReturnsPlansForUser(t *testing.T) {
-	fs := &fakePlanStore{plans: []store.UserPlan{{ID: "p1", UserID: "u1", Title: "Exit corp", Status: "active"}}}
+	fs := &fakePlanStore{plans: []store.UserPlan{{
+		ID:            "p1",
+		UserID:        "u1",
+		Title:         "Exit corp",
+		Status:        "active",
+		Category:      "work",
+		Tags:          []string{"career", "pipeline"},
+		DataSources:   []string{"github"},
+		ReviewCadence: "daily",
+		Metrics:       map[string]any{"target_clients": 3},
+	}}}
 	tool := &PlanListTool{Store: fs}
 	ctx := WithUserID(context.Background(), "u1")
 	res, err := tool.Execute(ctx, nil)
@@ -43,8 +53,12 @@ func TestPlanListReturnsPlansForUser(t *testing.T) {
 	if m["user_id"] != "u1" {
 		t.Errorf("user_id = %v", m["user_id"])
 	}
-	if got := len(m["plans"].([]map[string]any)); got != 1 {
+	plans := m["plans"].([]map[string]any)
+	if got := len(plans); got != 1 {
 		t.Errorf("expected 1 plan, got %d", got)
+	}
+	if plans[0]["category"] != "work" {
+		t.Errorf("expected category work, got %v", plans[0]["category"])
 	}
 }
 
@@ -79,6 +93,39 @@ func TestPlanUpsertCreatesNewWhenIDOmitted(t *testing.T) {
 	}
 	if fs.upserts[0].Status != "active" {
 		t.Errorf("expected default status active, got %q", fs.upserts[0].Status)
+	}
+}
+
+func TestPlanUpsertPersistsTypedMetadata(t *testing.T) {
+	fs := &fakePlanStore{}
+	tool := &PlanUpsertTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+	_, err := tool.Execute(ctx, map[string]any{
+		"title":          "Improve health",
+		"category":       "health",
+		"tags":           []any{"exercise", "sleep"},
+		"data_sources":   `["apple-health","strava"]`,
+		"review_cadence": "daily",
+		"metrics":        `{"target_workouts_per_week":4,"sleep_hours":8}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := fs.upserts[0]
+	if plan.Category != "health" {
+		t.Errorf("expected category health, got %q", plan.Category)
+	}
+	if len(plan.Tags) != 2 || plan.Tags[0] != "exercise" {
+		t.Errorf("unexpected tags: %#v", plan.Tags)
+	}
+	if len(plan.DataSources) != 2 || plan.DataSources[1] != "strava" {
+		t.Errorf("unexpected data sources: %#v", plan.DataSources)
+	}
+	if plan.ReviewCadence != "daily" {
+		t.Errorf("expected review cadence daily, got %q", plan.ReviewCadence)
+	}
+	if got, ok := plan.Metrics["target_workouts_per_week"]; !ok || got.(float64) != 4 {
+		t.Errorf("unexpected metrics: %#v", plan.Metrics)
 	}
 }
 
@@ -127,6 +174,12 @@ func TestPlanUpsertRejectsMalformedSteps(t *testing.T) {
 	if _, err := tool.Execute(ctx, map[string]any{"title": "x", "steps": []any{"not-an-object"}}); err == nil {
 		t.Error("expected error for non-object step item")
 	}
+	if _, err := tool.Execute(ctx, map[string]any{"title": "x", "tags": "not-an-array"}); err == nil {
+		t.Error("expected error for malformed tags")
+	}
+	if _, err := tool.Execute(ctx, map[string]any{"title": "x", "metrics": []any{"not-an-object"}}); err == nil {
+		t.Error("expected error for malformed metrics")
+	}
 }
 
 func TestPlanUpsertAcceptsStepsAsJSONString(t *testing.T) {
@@ -151,8 +204,10 @@ func TestPlanIngestTextDerivesTitleSummaryAndSteps(t *testing.T) {
 	ctx := WithUserID(context.Background(), "u1")
 
 	res, err := tool.Execute(ctx, map[string]any{
-		"text":   "# Launch project manager loop\n\nCoordinate the recurring check-in workflow.\n\n- [ ] Add recurring schedules\n- [x] Fix push delivery\n- Doing: wire goal updates",
-		"source": "External PM",
+		"text":     "# Launch project manager loop\n\nCoordinate the recurring check-in workflow.\n\n- [ ] Add recurring schedules\n- [x] Fix push delivery\n- Doing: wire goal updates",
+		"category": "work",
+		"tags":     []any{"assistant", "checkins"},
+		"source":   "External PM",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -177,6 +232,15 @@ func TestPlanIngestTextDerivesTitleSummaryAndSteps(t *testing.T) {
 	}
 	if len(plan.Steps) != 3 {
 		t.Fatalf("expected 3 steps, got %d", len(plan.Steps))
+	}
+	if plan.Category != "work" {
+		t.Errorf("unexpected category %q", plan.Category)
+	}
+	if len(plan.Tags) != 2 || plan.Tags[0] != "assistant" {
+		t.Errorf("unexpected tags %#v", plan.Tags)
+	}
+	if len(plan.DataSources) != 1 || plan.DataSources[0] != "External PM" {
+		t.Errorf("unexpected data sources %#v", plan.DataSources)
 	}
 	if plan.Steps[0]["status"] != "todo" || plan.Steps[1]["status"] != "done" || plan.Steps[2]["status"] != "doing" {
 		t.Errorf("unexpected step statuses: %+v", plan.Steps)

@@ -58,7 +58,20 @@ func (s *Service) ensureUserAndContext(ctx context.Context, userID string) []mod
 			if summary == "" {
 				summary = p.Status
 			}
-			fmt.Fprintf(&b, "- [%s] %s — %s\n", p.Status, p.Title, summary)
+			fmt.Fprintf(&b, "- [%s] %s", p.Status, p.Title)
+			if p.Category != "" {
+				fmt.Fprintf(&b, " <%s>", p.Category)
+			}
+			if p.ReviewCadence != "" {
+				fmt.Fprintf(&b, " [review: %s]", p.ReviewCadence)
+			}
+			if len(p.Tags) > 0 {
+				fmt.Fprintf(&b, " [tags: %s]", strings.Join(p.Tags, ", "))
+			}
+			if len(p.DataSources) > 0 {
+				fmt.Fprintf(&b, " [sources: %s]", strings.Join(p.DataSources, ", "))
+			}
+			fmt.Fprintf(&b, " — %s\n", summary)
 			for i, step := range p.Steps {
 				if i >= 5 {
 					fmt.Fprintf(&b, "  - ... %d more step(s)\n", len(p.Steps)-i)
@@ -73,6 +86,9 @@ func (s *Service) ensureUserAndContext(ctx context.Context, userID string) []mod
 					stepStatus = "todo"
 				}
 				fmt.Fprintf(&b, "  - (%s) %s\n", stepStatus, stepTitle)
+			}
+			if len(p.Metrics) > 0 {
+				fmt.Fprintf(&b, "  - metrics: %v\n", p.Metrics)
 			}
 		}
 	}
