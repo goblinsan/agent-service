@@ -218,6 +218,40 @@ Response:
 {
   "run_id":        "...",
   "status":        "completed",
+
+## Structured Plan Ingestion
+
+`plan_ingest_text` supports a structured YAML or JSON document shape in
+addition to plain-text notes. When the document follows the structured shape,
+the service imports plan metadata, milestones, and tasks directly instead of
+asking the model to interpret every line.
+
+Example:
+
+```yaml
+title: 1-Month Endurance Baseline Build
+summary: Build endurance and race readiness over four weeks.
+category: health
+tags:
+  - endurance
+  - running
+data_sources:
+  - healthfit
+  - loseit
+review_cadence: morning,afternoon,night
+metrics:
+  target_10k_pace: "7:00/mile"
+milestones:
+  - title: Week 1 base volume
+    summary: Establish consistent aerobic training and recovery.
+    tasks:
+      - title: Complete three easy runs
+        status: pending
+steps:
+  - Reassess pace targets at the end of week two.
+```
+
+See `docs/plan-document.example.yaml` for a fuller example.
   "output":        "...",
   "model_backend": "llama3"
 }

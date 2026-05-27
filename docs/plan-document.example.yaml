@@ -1,0 +1,35 @@
+title: 1-Month Endurance Baseline Build
+summary: Build endurance and race readiness over four weeks.
+category: health
+tags:
+  - endurance
+  - running
+  - cycling
+data_sources:
+  - healthfit
+  - loseit
+review_cadence: morning,afternoon,night
+metrics:
+  target_10k_pace: "7:00/mile"
+  target_cycling_endurance: "25 miles @ 16+ mph"
+  recovery_goal: consistent
+milestones:
+  - title: Week 1 base volume
+    summary: Establish consistent aerobic training and recovery.
+    tasks:
+      - title: Complete three easy runs
+        status: pending
+      - title: Complete one long ride
+        status: pending
+      - title: Log sleep and recovery notes daily
+        status: pending
+  - title: Week 2 build
+    summary: Increase intensity while protecting recovery.
+    tasks:
+      - title: Add one threshold session
+        status: pending
+      - title: Repeat long ride with stronger back half
+        status: pending
+steps:
+  - Reassess pace targets at the end of week two.
+  - Reduce volume if recovery quality drops for more than two days.
