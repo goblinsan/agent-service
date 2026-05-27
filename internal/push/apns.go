@@ -75,7 +75,8 @@ func NewAPNSDispatcher(st store.Store, cfg APNSConfig) (*Dispatcher, error) {
 		client: &http.Client{
 			Timeout: 8 * time.Second,
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+				TLSClientConfig:   &tls.Config{MinVersion: tls.VersionTLS12},
+				ForceAttemptHTTP2: true,
 			},
 		},
 	}, nil
