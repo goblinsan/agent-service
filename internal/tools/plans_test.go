@@ -12,6 +12,7 @@ type fakePlanStore struct {
 	store.Store
 	plans   []store.UserPlan
 	upserts []store.UserPlan
+	events  []store.UserEvent
 	listErr error
 	upErr   error
 }
@@ -28,6 +29,14 @@ func (f *fakePlanStore) UpsertUserPlan(ctx context.Context, p *store.UserPlan) e
 		return f.upErr
 	}
 	f.upserts = append(f.upserts, *p)
+	return nil
+}
+
+func (f *fakePlanStore) AppendUserEvent(ctx context.Context, evt *store.UserEvent) error {
+	if evt == nil {
+		return nil
+	}
+	f.events = append(f.events, *evt)
 	return nil
 }
 
@@ -126,6 +135,29 @@ func TestPlanUpsertPersistsTypedMetadata(t *testing.T) {
 	}
 	if got, ok := plan.Metrics["target_workouts_per_week"]; !ok || got.(float64) != 4 {
 		t.Errorf("unexpected metrics: %#v", plan.Metrics)
+	}
+}
+
+func TestPlanUpsertPersistsConnectorsAndDerivesDataSources(t *testing.T) {
+	fs := &fakePlanStore{}
+	tool := &PlanUpsertTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+	_, err := tool.Execute(ctx, map[string]any{
+		"title": "Improve nutrition consistency",
+		"connectors": []any{
+			map[string]any{"app": "apple-health", "domain": "health"},
+			map[string]any{"app": "loseit", "type": "personal_data_app", "domain": "nutrition", "external_id": "acct-1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := fs.upserts[0]
+	if len(plan.Connectors) != 2 || plan.Connectors[1].App != "loseit" {
+		t.Fatalf("unexpected connectors %#v", plan.Connectors)
+	}
+	if len(plan.DataSources) != 2 || plan.DataSources[0] != "apple-health" || plan.DataSources[1] != "loseit" {
+		t.Fatalf("unexpected data sources %#v", plan.DataSources)
 	}
 }
 
@@ -299,6 +331,31 @@ func TestPlanIngestTextUsesExistingIDWhenProvided(t *testing.T) {
 	}
 	if got := fs.upserts[0].ID; got != "plan-123" {
 		t.Errorf("expected plan id plan-123, got %q", got)
+	}
+}
+
+func TestPlanIngestTextAcceptsConnectorMetadata(t *testing.T) {
+	fs := &fakePlanStore{}
+	tool := &PlanIngestTextTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+
+	_, err := tool.Execute(ctx, map[string]any{
+		"text":      "Weight-loss sprint\n\nTrack calories and protein daily.",
+		"connector": map[string]any{"app": "loseit", "domain": "nutrition"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plan := fs.upserts[0]
+	if plan.Category != "nutrition" {
+		t.Fatalf("expected inferred nutrition category, got %q", plan.Category)
+	}
+	if len(plan.Connectors) != 1 || plan.Connectors[0].App != "loseit" {
+		t.Fatalf("unexpected connectors %#v", plan.Connectors)
+	}
+	if len(plan.DataSources) != 1 || plan.DataSources[0] != "loseit" {
+		t.Fatalf("unexpected data sources %#v", plan.DataSources)
 	}
 }
 
