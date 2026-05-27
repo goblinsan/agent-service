@@ -32,7 +32,7 @@ type structuredPlanDocument struct {
 	ReviewCadence string                     `yaml:"review_cadence" json:"review_cadence"`
 	Metrics       map[string]any             `yaml:"metrics" json:"metrics"`
 	Milestones    []structuredPlanMilestone  `yaml:"milestones" json:"milestones"`
-	Steps         []map[string]any           `yaml:"steps" json:"steps"`
+	Steps         []any                      `yaml:"steps" json:"steps"`
 }
 
 type structuredPlanMilestone struct {
@@ -54,6 +54,20 @@ type structuredPlanTask struct {
 // durable user_plans rows so other agents/systems can seed upcoming work.
 type PlanIngestTextTool struct {
 	Store store.Store
+}
+
+type PlanIngestRequest struct {
+	Text          string
+	Title         string
+	ID            string
+	Status        string
+	Category      string
+	Tags          []string
+	DataSources   []string
+	Connectors    []store.PlanConnector
+	ReviewCadence string
+	Metrics       map[string]any
+	Source        string
 }
 
 func (t *PlanIngestTextTool) Definition() Tool {
@@ -85,11 +99,49 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 	if uid == "" {
 		return nil, errors.New("no authenticated user on this run; cannot ingest plan")
 	}
+	plan, created, source, err := BuildUserPlanFromDocument(uid, params)
+	if err != nil {
+		return nil, err
+	}
+	store.NormalizeUserPlan(plan)
+	if err := t.Store.UpsertUserPlan(ctx, plan); err != nil {
+		return nil, fmt.Errorf("ingest plan: %w", err)
+	}
+
+	return map[string]any{
+		"status":  "ok",
+		"created": created,
+		"plan": map[string]any{
+			"id":             plan.ID,
+			"title":          plan.Title,
+			"status":         plan.Status,
+			"category":       plan.Category,
+			"tags":           plan.Tags,
+			"data_sources":   plan.DataSources,
+			"connectors":     plan.Connectors,
+			"review_cadence": plan.ReviewCadence,
+			"summary":        plan.Summary,
+			"metrics":        plan.Metrics,
+			"target":         plan.Target,
+			"vision":         plan.Vision,
+			"milestones":     plan.Milestones,
+			"progress":       plan.Progress,
+			"steps":          plan.Steps,
+			"step_count":     len(plan.Steps),
+			"source":         source,
+		},
+	}, nil
+}
+
+func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.UserPlan, bool, string, error) {
+	if strings.TrimSpace(userID) == "" {
+		return nil, false, "", errors.New("user id is required")
+	}
 
 	rawText, _ := params["text"].(string)
 	rawText = strings.TrimSpace(rawText)
 	if rawText == "" {
-		return nil, errors.New("text is required")
+		return nil, false, "", errors.New("text is required")
 	}
 
 	title, _ := params["title"].(string)
@@ -98,7 +150,7 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 		title = derivePlanTitle(rawText)
 	}
 	if title == "" {
-		return nil, errors.New("unable to derive plan title; provide title explicitly")
+		return nil, false, "", errors.New("unable to derive plan title; provide title explicitly")
 	}
 
 	id, _ := params["id"].(string)
@@ -118,26 +170,26 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 	category = strings.TrimSpace(category)
 	tags, err := normalizeStringList(params["tags"], "tags")
 	if err != nil {
-		return nil, err
+		return nil, false, "", err
 	}
 	dataSources, err := normalizeStringList(params["data_sources"], "data_sources")
 	if err != nil {
-		return nil, err
+		return nil, false, "", err
 	}
 	connectors, err := normalizePlanConnectors(params["connectors"])
 	if err != nil {
-		return nil, err
+		return nil, false, "", err
 	}
 	singleConnector, err := normalizeSinglePlanConnector(params["connector"])
 	if err != nil {
-		return nil, err
+		return nil, false, "", err
 	}
 	connectors = appendConnectorIfMissing(connectors, singleConnector)
 	reviewCadence, _ := params["review_cadence"].(string)
 	reviewCadence = strings.TrimSpace(reviewCadence)
 	metrics, err := normalizeObject(params["metrics"], "metrics")
 	if err != nil {
-		return nil, err
+		return nil, false, "", err
 	}
 
 	source, _ := params["source"].(string)
@@ -177,7 +229,7 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 		}
 		milestones = structuredMilestonesToStore(doc.Milestones)
 		if len(doc.Steps) > 0 {
-			steps = doc.Steps
+			steps = normalizeStructuredSteps(doc.Steps)
 		}
 	} else {
 		milestones = derivePlanMilestones(rawText)
@@ -187,7 +239,7 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 	}
 	plan := &store.UserPlan{
 		ID:            id,
-		UserID:        uid,
+		UserID:        userID,
 		Title:         title,
 		Status:        status,
 		Target:        title,
@@ -201,34 +253,7 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 		Milestones:    milestones,
 		Steps:         steps,
 	}
-	store.NormalizeUserPlan(plan)
-	if err := t.Store.UpsertUserPlan(ctx, plan); err != nil {
-		return nil, fmt.Errorf("ingest plan: %w", err)
-	}
-
-	return map[string]any{
-		"status":  "ok",
-		"created": created,
-		"plan": map[string]any{
-			"id":             plan.ID,
-			"title":          plan.Title,
-			"status":         plan.Status,
-			"category":       plan.Category,
-			"tags":           plan.Tags,
-			"data_sources":   plan.DataSources,
-			"connectors":     plan.Connectors,
-			"review_cadence": plan.ReviewCadence,
-			"summary":        plan.Summary,
-			"metrics":        plan.Metrics,
-			"target":         plan.Target,
-			"vision":         plan.Vision,
-			"milestones":     plan.Milestones,
-			"progress":       plan.Progress,
-			"steps":          plan.Steps,
-			"step_count":     len(plan.Steps),
-			"source":         source,
-		},
-	}, nil
+	return plan, created, source, nil
 }
 
 func derivePlanTitle(raw string) string {
@@ -380,6 +405,38 @@ func structuredMilestonesToStore(input []structuredPlanMilestone) []store.UserPl
 			Summary: strings.TrimSpace(milestone.Summary),
 			Tasks:   tasks,
 		})
+	}
+	return out
+}
+
+func normalizeStructuredSteps(input []any) []map[string]any {
+	out := make([]map[string]any, 0, len(input))
+	for _, item := range input {
+		switch value := item.(type) {
+		case string:
+			title := strings.TrimSpace(value)
+			if title == "" {
+				continue
+			}
+			out = append(out, map[string]any{
+				"title":  title,
+				"status": inferStepStatus(title),
+			})
+		case map[string]any:
+			out = append(out, value)
+		case map[any]any:
+			converted := map[string]any{}
+			for k, v := range value {
+				key, ok := k.(string)
+				if !ok {
+					continue
+				}
+				converted[key] = v
+			}
+			if len(converted) > 0 {
+				out = append(out, converted)
+			}
+		}
 	}
 	return out
 }

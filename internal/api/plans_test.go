@@ -58,3 +58,30 @@ func TestPlanCRUDEndpoints(t *testing.T) {
 	router.ServeHTTP(deleteResp, deleteReq)
 	require.Equal(t, http.StatusNoContent, deleteResp.Code)
 }
+
+func TestPlanImportEndpoint(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+	router := api.NewRouter(svc)
+
+	payload, err := json.Marshal(map[string]string{
+		"source": "endurance-yaml",
+		"text": "title: Endurance Plan\ncategory: health\nmilestones:\n  - title: Week 1\n    tasks:\n      - title: Easy run\n        status: pending\nsteps:\n  - Record heart rate.",
+	})
+	require.NoError(t, err)
+	importReq := httptest.NewRequest(http.MethodPost, "/internal/plans/import", bytes.NewBuffer(payload))
+	importReq.Header.Set("X-User-ID", "u1")
+	importReq.Header.Set("Content-Type", "application/json")
+	importResp := httptest.NewRecorder()
+	router.ServeHTTP(importResp, importReq)
+	require.Equal(t, http.StatusCreated, importResp.Code)
+	assert.Contains(t, importResp.Body.String(), `"title":"Endurance Plan"`)
+	assert.Contains(t, importResp.Body.String(), `"category":"health"`)
+
+	listReq := httptest.NewRequest(http.MethodGet, "/internal/plans", nil)
+	listReq.Header.Set("X-User-ID", "u1")
+	listResp := httptest.NewRecorder()
+	router.ServeHTTP(listResp, listReq)
+	require.Equal(t, http.StatusOK, listResp.Code)
+	assert.Contains(t, listResp.Body.String(), `"title":"Endurance Plan"`)
+}

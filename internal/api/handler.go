@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"github.com/goblinsan/agent-service/internal/service"
 	"github.com/goblinsan/agent-service/internal/sse"
 	"github.com/goblinsan/agent-service/internal/store"
+	"github.com/goblinsan/agent-service/internal/tools"
 )
 
 // RouterOptions configures optional features of the HTTP router.
@@ -107,6 +109,7 @@ func NewRouterWithOptions(svc *service.Service, opts RouterOptions) http.Handler
 	r.Get("/internal/plans", listPlansHandler(svc))
 	r.Get("/internal/plans/{id}", getPlanHandler(svc))
 	r.Post("/internal/plans", upsertPlanHandler(svc))
+	r.Post("/internal/plans/import", importPlanHandler(svc))
 	r.Delete("/internal/plans/{id}", deletePlanHandler(svc))
 
 	// Push token registration endpoints.
@@ -944,6 +947,75 @@ func upsertPlanHandler(svc *service.Service) http.HandlerFunc {
 		w.WriteHeader(statusCode)
 		if err := json.NewEncoder(w).Encode(map[string]any{"created": created, "plan": plan}); err != nil {
 			slog.Error("failed to encode plan upsert response", "error", err)
+		}
+	}
+}
+
+func importPlanHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		var req struct {
+			ID            string         `json:"id"`
+			Title         string         `json:"title"`
+			Text          string         `json:"text"`
+			Status        string         `json:"status"`
+			Category      string         `json:"category"`
+			Tags          []string       `json:"tags"`
+			DataSources   []string       `json:"data_sources"`
+			Connectors    []store.PlanConnector `json:"connectors"`
+			ReviewCadence string         `json:"review_cadence"`
+			Metrics       map[string]any `json:"metrics"`
+			Source        string         `json:"source"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		plan, created, source, err := tools.BuildUserPlanFromDocument(userID, map[string]any{
+			"id":             req.ID,
+			"title":          req.Title,
+			"text":           req.Text,
+			"status":         req.Status,
+			"category":       req.Category,
+			"tags":           req.Tags,
+			"data_sources":   req.DataSources,
+			"connectors":     req.Connectors,
+			"review_cadence": req.ReviewCadence,
+			"metrics":        req.Metrics,
+			"source":         req.Source,
+		})
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+		if err := svc.UpsertUserPlan(r.Context(), plan); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				http.Error(w, `{"error":"plan not found"}`, http.StatusNotFound)
+				return
+			}
+			if errors.Is(err, store.ErrForbidden) {
+				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+				return
+			}
+			slog.Error("import plan failed", "error", err, "user_id", userID, "plan_id", plan.ID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		statusCode := http.StatusOK
+		if created {
+			statusCode = http.StatusCreated
+		}
+		w.WriteHeader(statusCode)
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"created": created,
+			"source":  source,
+			"plan":    plan,
+		}); err != nil {
+			slog.Error("failed to encode plan import response", "error", err)
 		}
 	}
 }

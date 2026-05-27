@@ -273,6 +273,17 @@ func normalizeStringList(v any, field string) ([]string, error) {
 	if v == nil {
 		return nil, nil
 	}
+	if typed, ok := v.([]string); ok {
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			value := strings.TrimSpace(item)
+			if value == "" {
+				continue
+			}
+			out = append(out, value)
+		}
+		return out, nil
+	}
 	if s, ok := v.(string); ok {
 		s = strings.TrimSpace(s)
 		if s == "" {
@@ -359,6 +370,26 @@ func normalizePlanSteps(v any) ([]map[string]any, error) {
 func normalizePlanConnectors(v any) ([]store.PlanConnector, error) {
 	if v == nil {
 		return nil, nil
+	}
+	if typed, ok := v.([]store.PlanConnector); ok {
+		out := make([]store.PlanConnector, 0, len(typed))
+		for i, item := range typed {
+			app := strings.TrimSpace(item.App)
+			if app == "" {
+				return nil, fmt.Errorf("connectors[%d].app is required", i)
+			}
+			typ := strings.TrimSpace(item.Type)
+			if typ == "" {
+				typ = "personal_data_app"
+			}
+			out = append(out, store.PlanConnector{
+				App:        app,
+				Type:       typ,
+				Domain:     strings.TrimSpace(item.Domain),
+				ExternalID: strings.TrimSpace(item.ExternalID),
+			})
+		}
+		return out, nil
 	}
 	if s, ok := v.(string); ok {
 		s = strings.TrimSpace(s)
