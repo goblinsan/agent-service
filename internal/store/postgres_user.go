@@ -121,6 +121,7 @@ func (p *Postgres) UpsertUserPlan(ctx context.Context, plan *UserPlan) error {
 	if plan == nil || plan.ID == "" || plan.UserID == "" {
 		return errors.New("plan id and user_id required")
 	}
+	NormalizeUserPlan(plan)
 	steps := plan.Steps
 	if steps == nil {
 		steps = []map[string]any{}
@@ -161,19 +162,33 @@ func (p *Postgres) UpsertUserPlan(ctx context.Context, plan *UserPlan) error {
 	if err != nil {
 		return err
 	}
+	milestones := plan.Milestones
+	if milestones == nil {
+		milestones = []UserPlanMilestone{}
+	}
+	milestonesRaw, err := json.Marshal(milestones)
+	if err != nil {
+		return err
+	}
+	progressRaw, err := json.Marshal(plan.Progress)
+	if err != nil {
+		return err
+	}
 	status := plan.Status
 	if status == "" {
 		status = "draft"
 	}
-	_, err = p.db.ExecContext(ctx,
+	result, err := p.db.ExecContext(ctx,
 		`INSERT INTO user_plans (
-		     id, user_id, title, status, category, tags, data_sources,
-		     connectors, review_cadence, summary, metrics, steps, created_at, updated_at
+		     id, user_id, title, status, vision, target, category, tags, data_sources,
+		     connectors, review_cadence, summary, metrics, milestones, progress, steps, created_at, updated_at
 		 )
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW(), NOW())
 		 ON CONFLICT (id) DO UPDATE SET
 		   title = EXCLUDED.title,
 		   status = EXCLUDED.status,
+		   vision = EXCLUDED.vision,
+		   target = EXCLUDED.target,
 		   category = EXCLUDED.category,
 		   tags = EXCLUDED.tags,
 		   data_sources = EXCLUDED.data_sources,
@@ -181,12 +196,17 @@ func (p *Postgres) UpsertUserPlan(ctx context.Context, plan *UserPlan) error {
 		   review_cadence = EXCLUDED.review_cadence,
 		   summary = EXCLUDED.summary,
 		   metrics = EXCLUDED.metrics,
+		   milestones = EXCLUDED.milestones,
+		   progress = EXCLUDED.progress,
 		   steps = EXCLUDED.steps,
-		   updated_at = NOW()`,
+		   updated_at = NOW()
+		 WHERE user_plans.user_id = EXCLUDED.user_id`,
 		plan.ID,
 		plan.UserID,
 		plan.Title,
 		status,
+		nullableString(plan.Vision),
+		nullableString(plan.Target),
 		nullableString(plan.Category),
 		string(tagsRaw),
 		string(dataSourcesRaw),
@@ -194,15 +214,28 @@ func (p *Postgres) UpsertUserPlan(ctx context.Context, plan *UserPlan) error {
 		nullableString(plan.ReviewCadence),
 		nullableString(plan.Summary),
 		string(metricsRaw),
+		string(milestonesRaw),
+		string(progressRaw),
 		string(stepsRaw),
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrForbidden
+	}
+	return nil
 }
 
 func (p *Postgres) ListActivePlans(ctx context.Context, userID string) ([]UserPlan, error) {
 	rows, err := p.db.QueryContext(ctx,
-		`SELECT id, user_id, title, status, COALESCE(category, ''), tags, data_sources,
-		        connectors, COALESCE(review_cadence, ''), COALESCE(summary, ''), metrics, steps,
+		`SELECT id, user_id, title, status, COALESCE(vision, ''), COALESCE(target, ''),
+		        COALESCE(category, ''), tags, data_sources,
+		        connectors, COALESCE(review_cadence, ''), COALESCE(summary, ''), metrics, milestones, progress, steps,
 		        created_at, updated_at
 		 FROM user_plans
 		 WHERE user_id = $1 AND status NOT IN ('done', 'abandoned')
@@ -215,56 +248,124 @@ func (p *Postgres) ListActivePlans(ctx context.Context, userID string) ([]UserPl
 	defer rows.Close()
 	var out []UserPlan
 	for rows.Next() {
-		var p UserPlan
-		var tagsRaw []byte
-		var dataSourcesRaw []byte
-		var connectorsRaw []byte
-		var metricsRaw []byte
-		var stepsRaw []byte
-		if err := rows.Scan(
-			&p.ID,
-			&p.UserID,
-			&p.Title,
-			&p.Status,
-			&p.Category,
-			&tagsRaw,
-			&dataSourcesRaw,
-			&connectorsRaw,
-			&p.ReviewCadence,
-			&p.Summary,
-			&metricsRaw,
-			&stepsRaw,
-			&p.CreatedAt,
-			&p.UpdatedAt,
-		); err != nil {
+		plan, err := scanUserPlan(rows)
+		if err != nil {
 			return nil, err
 		}
-		if len(tagsRaw) > 0 {
-			if err := json.Unmarshal(tagsRaw, &p.Tags); err != nil {
-				return nil, err
-			}
-		}
-		if len(dataSourcesRaw) > 0 {
-			if err := json.Unmarshal(dataSourcesRaw, &p.DataSources); err != nil {
-				return nil, err
-			}
-		}
-		if len(connectorsRaw) > 0 {
-			if err := json.Unmarshal(connectorsRaw, &p.Connectors); err != nil {
-				return nil, err
-			}
-		}
-		if len(metricsRaw) > 0 {
-			if err := json.Unmarshal(metricsRaw, &p.Metrics); err != nil {
-				return nil, err
-			}
-		}
-		if len(stepsRaw) > 0 {
-			if err := json.Unmarshal(stepsRaw, &p.Steps); err != nil {
-				return nil, err
-			}
-		}
-		out = append(out, p)
+		out = append(out, plan)
 	}
 	return out, rows.Err()
+}
+
+func (p *Postgres) GetUserPlan(ctx context.Context, userID, planID string) (*UserPlan, error) {
+	rows, err := p.db.QueryContext(ctx,
+		`SELECT id, user_id, title, status, COALESCE(vision, ''), COALESCE(target, ''),
+		        COALESCE(category, ''), tags, data_sources, connectors,
+		        COALESCE(review_cadence, ''), COALESCE(summary, ''), metrics, milestones, progress, steps,
+		        created_at, updated_at
+		 FROM user_plans
+		 WHERE user_id = $1 AND id = $2
+		 LIMIT 1`,
+		userID, planID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, ErrNotFound
+	}
+	plan, err := scanUserPlan(rows)
+	if err != nil {
+		return nil, err
+	}
+	return &plan, nil
+}
+
+func (p *Postgres) DeleteUserPlan(ctx context.Context, userID, planID string) error {
+	res, err := p.db.ExecContext(ctx,
+		`DELETE FROM user_plans WHERE user_id = $1 AND id = $2`,
+		userID, planID,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func scanUserPlan(rows *sql.Rows) (UserPlan, error) {
+	var plan UserPlan
+	var tagsRaw []byte
+	var dataSourcesRaw []byte
+	var connectorsRaw []byte
+	var metricsRaw []byte
+	var milestonesRaw []byte
+	var progressRaw []byte
+	var stepsRaw []byte
+	if err := rows.Scan(
+		&plan.ID,
+		&plan.UserID,
+		&plan.Title,
+		&plan.Status,
+		&plan.Vision,
+		&plan.Target,
+		&plan.Category,
+		&tagsRaw,
+		&dataSourcesRaw,
+		&connectorsRaw,
+		&plan.ReviewCadence,
+		&plan.Summary,
+		&metricsRaw,
+		&milestonesRaw,
+		&progressRaw,
+		&stepsRaw,
+		&plan.CreatedAt,
+		&plan.UpdatedAt,
+	); err != nil {
+		return UserPlan{}, err
+	}
+	if len(tagsRaw) > 0 {
+		if err := json.Unmarshal(tagsRaw, &plan.Tags); err != nil {
+			return UserPlan{}, err
+		}
+	}
+	if len(dataSourcesRaw) > 0 {
+		if err := json.Unmarshal(dataSourcesRaw, &plan.DataSources); err != nil {
+			return UserPlan{}, err
+		}
+	}
+	if len(connectorsRaw) > 0 {
+		if err := json.Unmarshal(connectorsRaw, &plan.Connectors); err != nil {
+			return UserPlan{}, err
+		}
+	}
+	if len(metricsRaw) > 0 {
+		if err := json.Unmarshal(metricsRaw, &plan.Metrics); err != nil {
+			return UserPlan{}, err
+		}
+	}
+	if len(milestonesRaw) > 0 {
+		if err := json.Unmarshal(milestonesRaw, &plan.Milestones); err != nil {
+			return UserPlan{}, err
+		}
+	}
+	if len(progressRaw) > 0 {
+		if err := json.Unmarshal(progressRaw, &plan.Progress); err != nil {
+			return UserPlan{}, err
+		}
+	}
+	if len(stepsRaw) > 0 {
+		if err := json.Unmarshal(stepsRaw, &plan.Steps); err != nil {
+			return UserPlan{}, err
+		}
+	}
+	NormalizeUserPlan(&plan)
+	return plan, nil
 }

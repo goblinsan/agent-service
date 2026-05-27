@@ -125,6 +125,7 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 		UserID:        uid,
 		Title:         title,
 		Status:        status,
+		Target:        title,
 		Category:      category,
 		Tags:          tags,
 		DataSources:   dataSources,
@@ -134,6 +135,7 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 		Metrics:       metrics,
 		Steps:         steps,
 	}
+	store.NormalizeUserPlan(plan)
 	if err := t.Store.UpsertUserPlan(ctx, plan); err != nil {
 		return nil, fmt.Errorf("ingest plan: %w", err)
 	}
@@ -152,6 +154,10 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 			"review_cadence": plan.ReviewCadence,
 			"summary":        plan.Summary,
 			"metrics":        plan.Metrics,
+			"target":         plan.Target,
+			"vision":         plan.Vision,
+			"milestones":     plan.Milestones,
+			"progress":       plan.Progress,
 			"steps":          plan.Steps,
 			"step_count":     len(plan.Steps),
 			"source":         source,

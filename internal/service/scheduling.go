@@ -67,6 +67,23 @@ func (s *Service) ListDeviceTokens(ctx context.Context, userID, platform string)
 	return s.store.ListDeviceTokens(ctx, userID, platform)
 }
 
+func (s *Service) UpsertUserPlan(ctx context.Context, plan *store.UserPlan) error {
+	store.NormalizeUserPlan(plan)
+	return s.store.UpsertUserPlan(ctx, plan)
+}
+
+func (s *Service) ListActivePlans(ctx context.Context, userID string) ([]store.UserPlan, error) {
+	return s.store.ListActivePlans(ctx, userID)
+}
+
+func (s *Service) GetUserPlan(ctx context.Context, userID, planID string) (*store.UserPlan, error) {
+	return s.store.GetUserPlan(ctx, userID, planID)
+}
+
+func (s *Service) DeleteUserPlan(ctx context.Context, userID, planID string) error {
+	return s.store.DeleteUserPlan(ctx, userID, planID)
+}
+
 // RunScheduledJob executes a scheduled prompt as a sync automation run and
 // returns the parsed automation result body.
 func (s *Service) RunScheduledJob(ctx context.Context, job store.ScheduledJob) (*AutomationRunResult, error) {

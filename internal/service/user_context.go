@@ -60,6 +60,9 @@ func (s *Service) ensureUserAndContext(ctx context.Context, userID string) []mod
 				summary = p.Status
 			}
 			fmt.Fprintf(&b, "- [%s] %s", p.Status, p.Title)
+			if p.Target != "" {
+				fmt.Fprintf(&b, " (target: %s)", p.Target)
+			}
 			if p.Category != "" {
 				fmt.Fprintf(&b, " <%s>", p.Category)
 			}
@@ -76,20 +79,48 @@ func (s *Service) ensureUserAndContext(ctx context.Context, userID string) []mod
 				fmt.Fprintf(&b, " [connectors: %s]", formatPlanConnectors(p.Connectors))
 			}
 			fmt.Fprintf(&b, " — %s\n", summary)
-			for i, step := range p.Steps {
-				if i >= 5 {
-					fmt.Fprintf(&b, "  - ... %d more step(s)\n", len(p.Steps)-i)
-					break
+			if p.Progress.TaskCount > 0 {
+				fmt.Fprintf(&b, "  - progress: %.0f%% (%d/%d tasks complete)\n", p.Progress.PercentComplete, p.Progress.CompletedTasks, p.Progress.TaskCount)
+			}
+			if len(p.Milestones) > 0 {
+				for i, milestone := range p.Milestones {
+					if i >= 3 {
+						fmt.Fprintf(&b, "  - ... %d more milestone(s)\n", len(p.Milestones)-i)
+						break
+					}
+					milestoneStatus := strings.TrimSpace(milestone.Status)
+					if milestoneStatus == "" {
+						milestoneStatus = "todo"
+					}
+					fmt.Fprintf(&b, "  - milestone (%s): %s\n", milestoneStatus, milestone.Title)
+					for j, task := range milestone.Tasks {
+						if j >= 2 {
+							fmt.Fprintf(&b, "    - ... %d more task(s)\n", len(milestone.Tasks)-j)
+							break
+						}
+						taskStatus := strings.TrimSpace(task.Status)
+						if taskStatus == "" {
+							taskStatus = "todo"
+						}
+						fmt.Fprintf(&b, "    - (%s) %s\n", taskStatus, task.Title)
+					}
 				}
-				stepTitle, _ := step["title"].(string)
-				stepStatus, _ := step["status"].(string)
-				if strings.TrimSpace(stepTitle) == "" {
-					continue
+			} else {
+				for i, step := range p.Steps {
+					if i >= 5 {
+						fmt.Fprintf(&b, "  - ... %d more step(s)\n", len(p.Steps)-i)
+						break
+					}
+					stepTitle, _ := step["title"].(string)
+					stepStatus, _ := step["status"].(string)
+					if strings.TrimSpace(stepTitle) == "" {
+						continue
+					}
+					if stepStatus == "" {
+						stepStatus = "todo"
+					}
+					fmt.Fprintf(&b, "  - (%s) %s\n", stepStatus, stepTitle)
 				}
-				if stepStatus == "" {
-					stepStatus = "todo"
-				}
-				fmt.Fprintf(&b, "  - (%s) %s\n", stepStatus, stepTitle)
 			}
 			if len(p.Metrics) > 0 {
 				fmt.Fprintf(&b, "  - metrics: %v\n", p.Metrics)

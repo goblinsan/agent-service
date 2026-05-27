@@ -21,12 +21,14 @@ type mockStore struct {
 	sessions map[string]*store.Session
 	runs     map[string]*store.Run
 	steps    []*store.RunStep
+	plans    map[string]map[string]store.UserPlan
 }
 
 func newMockStore() *mockStore {
 	return &mockStore{
 		sessions: make(map[string]*store.Session),
 		runs:     make(map[string]*store.Run),
+		plans:    make(map[string]map[string]store.UserPlan),
 	}
 }
 
@@ -290,5 +292,5 @@ func (m *mockStore) ListThreadsForUser(_ context.Context, _ string, _ int) ([]st
 func (m *mockStore) GetThreadForUser(_ context.Context, _, _ string) ([]store.ThreadMessage, error) {
 	return nil, nil
 }
-func (m *mockStore) DeleteThreadForUser(_ context.Context, _, _ string) error { return nil }
+func (m *mockStore) DeleteThreadForUser(_ context.Context, _, _ string) error    { return nil }
 func (m *mockStore) RenameThreadForUser(_ context.Context, _, _, _ string) error { return nil }
