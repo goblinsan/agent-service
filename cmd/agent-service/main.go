@@ -99,6 +99,30 @@ func main() {
 	if err := reg.Register(&tools.PlanIngestTextTool{Store: pg}); err != nil {
 		slog.Warn("register plan_ingest_text", "error", err)
 	}
+	if err := reg.Register(&tools.PersonalDataIngestTool{
+		Store:         pg,
+		App:           "healthfit",
+		Domain:        "health",
+		ToolName:      "healthfit_ingest_summary",
+		ToolDesc:      "Ingest a normalized HealthFit summary into durable plan context and recent events so project-manager guidance reflects current activity and health progress.",
+		PlanTitle:     "Health goals & activity",
+		DefaultSource: "HealthFit",
+		EventKind:     "health_sync",
+	}); err != nil {
+		slog.Warn("register healthfit_ingest_summary", "error", err)
+	}
+	if err := reg.Register(&tools.PersonalDataIngestTool{
+		Store:         pg,
+		App:           "loseit",
+		Domain:        "nutrition",
+		ToolName:      "loseit_ingest_summary",
+		ToolDesc:      "Ingest a normalized Lose It summary into durable plan context and recent events so project-manager guidance reflects current nutrition progress.",
+		PlanTitle:     "Nutrition goals & intake",
+		DefaultSource: "Lose It",
+		EventKind:     "nutrition_sync",
+	}); err != nil {
+		slog.Warn("register loseit_ingest_summary", "error", err)
+	}
 	if err := reg.Register(&tools.ScheduleCreateTool{Store: pg}); err != nil {
 		slog.Warn("register create_schedule", "error", err)
 	}

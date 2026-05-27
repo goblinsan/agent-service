@@ -12,6 +12,7 @@ type fakePlanStore struct {
 	store.Store
 	plans   []store.UserPlan
 	upserts []store.UserPlan
+	events  []store.UserEvent
 	listErr error
 	upErr   error
 }
@@ -28,6 +29,14 @@ func (f *fakePlanStore) UpsertUserPlan(ctx context.Context, p *store.UserPlan) e
 		return f.upErr
 	}
 	f.upserts = append(f.upserts, *p)
+	return nil
+}
+
+func (f *fakePlanStore) AppendUserEvent(ctx context.Context, evt *store.UserEvent) error {
+	if evt == nil {
+		return nil
+	}
+	f.events = append(f.events, *evt)
 	return nil
 }
 
