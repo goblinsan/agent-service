@@ -171,6 +171,7 @@ type ScheduledJob struct {
 	Payload     map[string]any
 	RunAt       time.Time
 	Recurrence  string
+	Timezone    string
 	Status      string
 	LockedUntil *time.Time
 	LastRunAt   *time.Time

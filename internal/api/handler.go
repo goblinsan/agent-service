@@ -719,6 +719,7 @@ func createScheduleHandler(svc *service.Service) http.HandlerFunc {
 			Payload    map[string]any `json:"payload"`
 			RunAt      string         `json:"run_at"`
 			Recurrence string         `json:"recurrence"`
+			Timezone   string         `json:"timezone"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -747,6 +748,7 @@ func createScheduleHandler(svc *service.Service) http.HandlerFunc {
 			Payload:    req.Payload,
 			RunAt:      runAt.UTC(),
 			Recurrence: strings.TrimSpace(req.Recurrence),
+			Timezone:   strings.TrimSpace(req.Timezone),
 			Status:     "pending",
 		}
 		if err := svc.CreateScheduledJob(r.Context(), job); err != nil {

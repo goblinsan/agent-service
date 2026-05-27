@@ -147,10 +147,10 @@ func (p *Postgres) CreateScheduledJob(ctx context.Context, job *ScheduledJob) er
 		return err
 	}
 	return p.db.QueryRowContext(ctx,
-		`INSERT INTO scheduled_jobs (id, user_id, kind, prompt, thread_id, agent_id, payload, run_at, recurrence, status, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, ''), $10, NOW(), NOW())
+		`INSERT INTO scheduled_jobs (id, user_id, kind, prompt, thread_id, agent_id, payload, run_at, recurrence, timezone, status, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, ''), NULLIF($10, ''), $11, NOW(), NOW())
 		 RETURNING created_at, updated_at`,
-		job.ID, job.UserID, job.Kind, job.Prompt, nullableString(job.ThreadID), nullableString(job.AgentID), string(raw), job.RunAt, job.Recurrence, job.Status,
+		job.ID, job.UserID, job.Kind, job.Prompt, nullableString(job.ThreadID), nullableString(job.AgentID), string(raw), job.RunAt, job.Recurrence, job.Timezone, job.Status,
 	).Scan(&job.CreatedAt, &job.UpdatedAt)
 }
 
@@ -160,7 +160,7 @@ func (p *Postgres) ListScheduledJobs(ctx context.Context, userID string, limit i
 	}
 	rows, err := p.db.QueryContext(ctx,
 		`SELECT id, user_id, kind, prompt, COALESCE(thread_id, ''), COALESCE(agent_id, ''), payload,
-		        run_at, COALESCE(recurrence, ''), status, locked_until, last_run_at, created_at, updated_at
+		        run_at, COALESCE(recurrence, ''), COALESCE(timezone, ''), status, locked_until, last_run_at, created_at, updated_at
 		 FROM scheduled_jobs
 		 WHERE user_id = $1
 		 ORDER BY run_at ASC
@@ -227,7 +227,7 @@ func (p *Postgres) AcquireDueScheduledJobs(ctx context.Context, limit int, lease
 			FROM due
 			WHERE s.id = due.id
 			RETURNING s.id, s.user_id, s.kind, s.prompt, COALESCE(s.thread_id, ''), COALESCE(s.agent_id, ''), s.payload,
-			          s.run_at, COALESCE(s.recurrence, ''), s.status, s.locked_until, s.last_run_at, s.created_at, s.updated_at
+			          s.run_at, COALESCE(s.recurrence, ''), COALESCE(s.timezone, ''), s.status, s.locked_until, s.last_run_at, s.created_at, s.updated_at
 		)
 		SELECT * FROM claimed`,
 		limit, formatInterval(lease),
@@ -361,6 +361,7 @@ func scanScheduledJob(rows *sql.Rows) (ScheduledJob, error) {
 		&payloadRaw,
 		&job.RunAt,
 		&job.Recurrence,
+		&job.Timezone,
 		&job.Status,
 		&lockedUntil,
 		&lastRunAt,

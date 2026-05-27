@@ -91,6 +91,8 @@ func (w *Worker) runJob(ctx context.Context, job store.ScheduledJob) {
 	title := "Scheduled work completed"
 	if strings.EqualFold(strings.TrimSpace(job.Kind), "reminder") {
 		title = "Reminder"
+	} else if strings.EqualFold(strings.TrimSpace(job.Kind), "project_checkin") {
+		title = "Project check-in"
 	}
 	_ = w.emitNotification(ctx, store.Notification{
 		ID:          newID(),
@@ -140,6 +142,13 @@ func nextRunAt(job store.ScheduledJob, now time.Time) (*time.Time, error) {
 	if recurrence == "" {
 		return nil, nil
 	}
+	if strings.HasPrefix(recurrence, "@daily-local") {
+		next, err := nextDailyLocalRun(job, now)
+		if err != nil {
+			return nil, err
+		}
+		return &next, nil
+	}
 	d, err := parseRecurrence(recurrence)
 	if err != nil {
 		return nil, err
@@ -152,6 +161,58 @@ func nextRunAt(job store.ScheduledJob, now time.Time) (*time.Time, error) {
 		next = next.Add(d)
 	}
 	return &next, nil
+}
+
+func nextDailyLocalRun(job store.ScheduledJob, now time.Time) (time.Time, error) {
+	spec, err := parseDailyLocalRecurrence(job.Recurrence)
+	if err != nil {
+		return time.Time{}, err
+	}
+	timezone := strings.TrimSpace(job.Timezone)
+	if timezone == "" {
+		return time.Time{}, fmt.Errorf("timezone is required for daily-local recurrence")
+	}
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("load timezone %q: %w", timezone, err)
+	}
+	localNow := now.In(loc)
+	for dayOffset := 0; dayOffset < 8; dayOffset++ {
+		day := localNow.AddDate(0, 0, dayOffset)
+		for _, hhmm := range spec.Times {
+			clock, _ := time.Parse("15:04", hhmm)
+			candidate := time.Date(day.Year(), day.Month(), day.Day(), clock.Hour(), clock.Minute(), 0, 0, loc)
+			if candidate.After(localNow) {
+				return candidate.UTC(), nil
+			}
+		}
+	}
+	return time.Time{}, fmt.Errorf("unable to compute next daily-local run")
+}
+
+type dailyLocalRecurrenceSpec struct {
+	Times []string
+}
+
+func parseDailyLocalRecurrence(raw string) (dailyLocalRecurrenceSpec, error) {
+	value := strings.TrimSpace(raw)
+	if !strings.HasPrefix(value, "@daily-local") {
+		return dailyLocalRecurrenceSpec{}, fmt.Errorf("expected @daily-local recurrence")
+	}
+	remainder := strings.TrimSpace(strings.TrimPrefix(value, "@daily-local"))
+	if remainder == "" {
+		return dailyLocalRecurrenceSpec{}, fmt.Errorf("daily-local recurrence requires at least one HH:MM time")
+	}
+	parts := strings.Split(remainder, ",")
+	times := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if _, err := time.Parse("15:04", part); err != nil {
+			return dailyLocalRecurrenceSpec{}, fmt.Errorf("invalid daily-local time %q: %w", part, err)
+		}
+		times = append(times, part)
+	}
+	return dailyLocalRecurrenceSpec{Times: times}, nil
 }
 
 func parseRecurrence(raw string) (time.Duration, error) {

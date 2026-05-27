@@ -419,8 +419,23 @@ func TestEffectiveAutomationToolPolicy_DeniesCreateScheduleForReminderJobs(t *te
 
 	require.NotNil(t, spec)
 	assert.Contains(t, spec.DeniedTools, "create_schedule")
+	assert.Contains(t, spec.DeniedTools, "create_project_checkin")
 	assert.Contains(t, spec.AllowedTools, "create_schedule")
 	assert.Contains(t, spec.RequireApproval, "file")
+}
+
+func TestEffectiveAutomationToolPolicy_DeniesSchedulingForProjectCheckins(t *testing.T) {
+	spec := service.EffectiveAutomationToolPolicyForTest(&service.AutomationRunRequest{
+		JobType: "project_checkin",
+		ToolPolicy: &service.ToolPolicySpec{
+			AllowedTools: []string{"create_schedule", "create_project_checkin", "plan_upsert"},
+		},
+	})
+
+	require.NotNil(t, spec)
+	assert.Contains(t, spec.DeniedTools, "create_schedule")
+	assert.Contains(t, spec.DeniedTools, "create_project_checkin")
+	assert.Contains(t, spec.AllowedTools, "plan_upsert")
 }
 
 // ---------------------------------------------------------------------------

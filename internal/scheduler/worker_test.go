@@ -64,3 +64,24 @@ func TestNextJobStateInvalidRecurrenceDisablesJob(t *testing.T) {
 		t.Fatalf("expected nil nextRun for invalid recurrence, got %s", nextRun)
 	}
 }
+
+func TestNextJobStateDailyLocalRecurrence(t *testing.T) {
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	job := store.ScheduledJob{
+		ID:         "job-4",
+		RunAt:      now.Add(-24 * time.Hour),
+		Recurrence: "@daily-local 08:00,13:00,20:00",
+		Timezone:   "America/New_York",
+	}
+
+	status, nextRun := nextJobState(job, now, true)
+	if status != "pending" {
+		t.Fatalf("expected pending status, got %q", status)
+	}
+	if nextRun == nil {
+		t.Fatal("expected next run for daily-local recurrence")
+	}
+	if got := nextRun.Format(time.RFC3339); got != "2026-05-26T17:00:00Z" {
+		t.Fatalf("unexpected next daily-local run %s", got)
+	}
+}

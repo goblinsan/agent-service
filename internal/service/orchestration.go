@@ -843,6 +843,11 @@ func effectiveAutomationToolPolicy(req *AutomationRunRequest) *ToolPolicySpec {
 
 	if strings.EqualFold(strings.TrimSpace(req.JobType), "reminder") {
 		spec.DeniedTools = appendUniqueStrings(spec.DeniedTools, "create_schedule")
+		spec.DeniedTools = appendUniqueStrings(spec.DeniedTools, "create_project_checkin")
+	}
+	if strings.EqualFold(strings.TrimSpace(req.JobType), "project_checkin") {
+		spec.DeniedTools = appendUniqueStrings(spec.DeniedTools, "create_schedule")
+		spec.DeniedTools = appendUniqueStrings(spec.DeniedTools, "create_project_checkin")
 	}
 
 	if len(spec.AllowedTools) == 0 && len(spec.RequireApproval) == 0 && len(spec.DeniedTools) == 0 {

@@ -79,3 +79,50 @@ func TestScheduleCreateToolRequiresTiming(t *testing.T) {
 		t.Fatal("expected error when no timing supplied")
 	}
 }
+
+func TestProjectCheckinCreateToolBuildsDailyLocalSchedule(t *testing.T) {
+	st := &fakeScheduleStore{}
+	tool := &ProjectCheckinCreateTool{Store: st}
+	ctx := WithUserID(context.Background(), "alice")
+	ctx = WithRunMetadata(ctx, "thread-9", "agent-9")
+
+	out, err := tool.Execute(ctx, map[string]any{
+		"windows":  []any{"morning", "night"},
+		"timezone": "America/New_York",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if st.created == nil {
+		t.Fatal("expected schedule to be created")
+	}
+	if st.created.Kind != "project_checkin" {
+		t.Fatalf("expected project_checkin kind, got %q", st.created.Kind)
+	}
+	if st.created.Recurrence != "@daily-local 08:00,20:00" {
+		t.Fatalf("unexpected recurrence: %q", st.created.Recurrence)
+	}
+	if st.created.Timezone != "America/New_York" {
+		t.Fatalf("unexpected timezone: %q", st.created.Timezone)
+	}
+	if st.created.ThreadID != "thread-9" || st.created.AgentID != "agent-9" {
+		t.Fatalf("unexpected defaults: %+v", st.created)
+	}
+	result, ok := out.(map[string]any)
+	if !ok || result["status"] != "ok" {
+		t.Fatalf("unexpected tool result: %#v", out)
+	}
+}
+
+func TestProjectCheckinCreateToolRejectsUnknownWindow(t *testing.T) {
+	st := &fakeScheduleStore{}
+	tool := &ProjectCheckinCreateTool{Store: st}
+	ctx := WithUserID(context.Background(), "alice")
+
+	_, err := tool.Execute(ctx, map[string]any{
+		"windows": []any{"brunch"},
+	})
+	if err == nil {
+		t.Fatal("expected error for unsupported window")
+	}
+}

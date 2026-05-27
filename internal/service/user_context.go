@@ -104,6 +104,7 @@ func (s *Service) ensureUserAndContext(ctx context.Context, userID string) []mod
 	b.WriteString("\nWhen the user asks for project-manager-style guidance, planning help, or a goal review, call plan_list early in the run so you are using the latest durable plan state instead of stale assumptions.")
 	b.WriteString("\nWhen the user pastes a plan, roadmap, or text document from another system and wants it tracked, call plan_ingest_text to convert that text into a durable plan before giving follow-up guidance.")
 	b.WriteString("\nReminders and delayed follow-ups: when the user asks to be reminded later or wants something to happen at a future time, call create_schedule. Prefer delay_seconds for relative times like 'in 1 minute'. Do not use memory_write as a substitute for reminders.")
+	b.WriteString("\nRecurring project-manager follow-ups: when the user wants regular morning, afternoon, or night check-ins about goals, progress, and next actions, call create_project_checkin instead of create_schedule.")
 	return []model.Message{{Role: model.RoleSystem, Content: b.String()}}
 }
 
