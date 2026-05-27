@@ -252,7 +252,7 @@ func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.Use
 	}
 
 	summary := derivePlanSummary(rawText, title, source)
-	steps := derivePlanSteps(rawText)
+	var steps []map[string]any
 	var milestones []store.UserPlanMilestone
 	if doc, ok := parseStructuredPlanDocument(rawText); ok {
 		if strings.TrimSpace(doc.Title) != "" {
@@ -309,6 +309,8 @@ func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.Use
 		milestones = derivePlanMilestones(rawText)
 		if len(milestones) > 0 {
 			steps = nil
+		} else {
+			steps = derivePlanSteps(rawText)
 		}
 	}
 	plan := &store.UserPlan{
