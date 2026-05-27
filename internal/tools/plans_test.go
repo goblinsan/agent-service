@@ -129,6 +129,29 @@ func TestPlanUpsertPersistsTypedMetadata(t *testing.T) {
 	}
 }
 
+func TestPlanUpsertPersistsConnectorsAndDerivesDataSources(t *testing.T) {
+	fs := &fakePlanStore{}
+	tool := &PlanUpsertTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+	_, err := tool.Execute(ctx, map[string]any{
+		"title": "Improve nutrition consistency",
+		"connectors": []any{
+			map[string]any{"app": "apple-health", "domain": "health"},
+			map[string]any{"app": "loseit", "type": "personal_data_app", "domain": "nutrition", "external_id": "acct-1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := fs.upserts[0]
+	if len(plan.Connectors) != 2 || plan.Connectors[1].App != "loseit" {
+		t.Fatalf("unexpected connectors %#v", plan.Connectors)
+	}
+	if len(plan.DataSources) != 2 || plan.DataSources[0] != "apple-health" || plan.DataSources[1] != "loseit" {
+		t.Fatalf("unexpected data sources %#v", plan.DataSources)
+	}
+}
+
 func TestPlanUpsertUpdatesWhenIDProvided(t *testing.T) {
 	fs := &fakePlanStore{}
 	tool := &PlanUpsertTool{Store: fs}
@@ -266,5 +289,30 @@ func TestPlanIngestTextUsesExistingIDWhenProvided(t *testing.T) {
 	}
 	if got := fs.upserts[0].ID; got != "plan-123" {
 		t.Errorf("expected plan id plan-123, got %q", got)
+	}
+}
+
+func TestPlanIngestTextAcceptsConnectorMetadata(t *testing.T) {
+	fs := &fakePlanStore{}
+	tool := &PlanIngestTextTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+
+	_, err := tool.Execute(ctx, map[string]any{
+		"text":      "Weight-loss sprint\n\nTrack calories and protein daily.",
+		"connector": map[string]any{"app": "loseit", "domain": "nutrition"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plan := fs.upserts[0]
+	if plan.Category != "nutrition" {
+		t.Fatalf("expected inferred nutrition category, got %q", plan.Category)
+	}
+	if len(plan.Connectors) != 1 || plan.Connectors[0].App != "loseit" {
+		t.Fatalf("unexpected connectors %#v", plan.Connectors)
+	}
+	if len(plan.DataSources) != 1 || plan.DataSources[0] != "loseit" {
+		t.Fatalf("unexpected data sources %#v", plan.DataSources)
 	}
 }

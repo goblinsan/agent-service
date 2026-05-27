@@ -45,6 +45,7 @@ func (t *PlanListTool) Execute(ctx context.Context, _ map[string]any) (any, erro
 			"category":       p.Category,
 			"tags":           p.Tags,
 			"data_sources":   p.DataSources,
+			"connectors":     p.Connectors,
 			"review_cadence": p.ReviewCadence,
 			"summary":        p.Summary,
 			"metrics":        p.Metrics,
@@ -71,6 +72,7 @@ func (t *PlanUpsertTool) Definition() Tool {
 			{Name: "category", Type: "string", Description: "Optional plan category such as work, health, finance, or social.", Required: false},
 			{Name: "tags", Type: "array", Description: "Optional list of free-form tags for filtering and grouping.", Required: false},
 			{Name: "data_sources", Type: "array", Description: "Optional list of systems or apps this plan depends on, for example apple-health, strava, loseit, budget-sheet, or github.", Required: false},
+			{Name: "connectors", Type: "array", Description: "Optional list of connector objects for integrated apps. Each object should include app (required) plus optional type, domain, and external_id.", Required: false},
 			{Name: "review_cadence", Type: "string", Description: "Optional human-readable review cadence such as daily, weekday-morning, weekly, or quarterly.", Required: false},
 			{Name: "summary", Type: "string", Description: "One- or two-sentence description of the goal and why it matters.", Required: false},
 			{Name: "metrics", Type: "object", Description: "Optional structured metrics map, for example {\"target_workouts_per_week\":4,\"weekly_budget_usd\":500}.", Required: false},
@@ -119,6 +121,11 @@ func (t *PlanUpsertTool) Execute(ctx context.Context, params map[string]any) (an
 	if err != nil {
 		return nil, err
 	}
+	connectors, err := normalizePlanConnectors(params["connectors"])
+	if err != nil {
+		return nil, err
+	}
+	dataSources = mergeDataSourcesWithConnectors(dataSources, connectors)
 	reviewCadence, _ := params["review_cadence"].(string)
 	reviewCadence = strings.TrimSpace(reviewCadence)
 	metrics, err := normalizeObject(params["metrics"], "metrics")
@@ -139,6 +146,7 @@ func (t *PlanUpsertTool) Execute(ctx context.Context, params map[string]any) (an
 		Category:      category,
 		Tags:          tags,
 		DataSources:   dataSources,
+		Connectors:    connectors,
 		ReviewCadence: reviewCadence,
 		Summary:       summary,
 		Metrics:       metrics,
@@ -157,6 +165,7 @@ func (t *PlanUpsertTool) Execute(ctx context.Context, params map[string]any) (an
 			"category":       plan.Category,
 			"tags":           plan.Tags,
 			"data_sources":   plan.DataSources,
+			"connectors":     plan.Connectors,
 			"review_cadence": plan.ReviewCadence,
 			"summary":        plan.Summary,
 			"metrics":        plan.Metrics,
@@ -250,6 +259,66 @@ func normalizePlanSteps(v any) ([]map[string]any, error) {
 		out = append(out, obj)
 	}
 	return out, nil
+}
+
+func normalizePlanConnectors(v any) ([]store.PlanConnector, error) {
+	if v == nil {
+		return nil, nil
+	}
+	if s, ok := v.(string); ok {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil, nil
+		}
+		var decoded any
+		if err := json.Unmarshal([]byte(s), &decoded); err != nil {
+			return nil, fmt.Errorf("connectors string is not valid JSON: %w", err)
+		}
+		v = decoded
+	}
+	raw, ok := v.([]any)
+	if !ok {
+		return nil, errors.New("connectors must be an array of objects")
+	}
+	out := make([]store.PlanConnector, 0, len(raw))
+	for i, item := range raw {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("connectors[%d] must be an object", i)
+		}
+		app, _ := obj["app"].(string)
+		app = strings.TrimSpace(app)
+		if app == "" {
+			return nil, fmt.Errorf("connectors[%d].app is required", i)
+		}
+		typ, _ := obj["type"].(string)
+		typ = strings.TrimSpace(typ)
+		if typ == "" {
+			typ = "personal_data_app"
+		}
+		domain, _ := obj["domain"].(string)
+		externalID, _ := obj["external_id"].(string)
+		out = append(out, store.PlanConnector{
+			App:        app,
+			Type:       typ,
+			Domain:     strings.TrimSpace(domain),
+			ExternalID: strings.TrimSpace(externalID),
+		})
+	}
+	return out, nil
+}
+
+func mergeDataSourcesWithConnectors(dataSources []string, connectors []store.PlanConnector) []string {
+	out := append([]string(nil), dataSources...)
+	for _, c := range connectors {
+		if strings.TrimSpace(c.App) == "" {
+			continue
+		}
+		if !containsString(out, c.App) {
+			out = append(out, c.App)
+		}
+	}
+	return out
 }
 
 func newPlanID() string {

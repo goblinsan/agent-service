@@ -145,6 +145,14 @@ func (p *Postgres) UpsertUserPlan(ctx context.Context, plan *UserPlan) error {
 	if err != nil {
 		return err
 	}
+	connectors := plan.Connectors
+	if connectors == nil {
+		connectors = []PlanConnector{}
+	}
+	connectorsRaw, err := json.Marshal(connectors)
+	if err != nil {
+		return err
+	}
 	metrics := plan.Metrics
 	if metrics == nil {
 		metrics = map[string]any{}
@@ -160,15 +168,16 @@ func (p *Postgres) UpsertUserPlan(ctx context.Context, plan *UserPlan) error {
 	_, err = p.db.ExecContext(ctx,
 		`INSERT INTO user_plans (
 		     id, user_id, title, status, category, tags, data_sources,
-		     review_cadence, summary, metrics, steps, created_at, updated_at
+		     connectors, review_cadence, summary, metrics, steps, created_at, updated_at
 		 )
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
 		 ON CONFLICT (id) DO UPDATE SET
 		   title = EXCLUDED.title,
 		   status = EXCLUDED.status,
 		   category = EXCLUDED.category,
 		   tags = EXCLUDED.tags,
 		   data_sources = EXCLUDED.data_sources,
+		   connectors = EXCLUDED.connectors,
 		   review_cadence = EXCLUDED.review_cadence,
 		   summary = EXCLUDED.summary,
 		   metrics = EXCLUDED.metrics,
@@ -181,6 +190,7 @@ func (p *Postgres) UpsertUserPlan(ctx context.Context, plan *UserPlan) error {
 		nullableString(plan.Category),
 		string(tagsRaw),
 		string(dataSourcesRaw),
+		string(connectorsRaw),
 		nullableString(plan.ReviewCadence),
 		nullableString(plan.Summary),
 		string(metricsRaw),
@@ -192,7 +202,7 @@ func (p *Postgres) UpsertUserPlan(ctx context.Context, plan *UserPlan) error {
 func (p *Postgres) ListActivePlans(ctx context.Context, userID string) ([]UserPlan, error) {
 	rows, err := p.db.QueryContext(ctx,
 		`SELECT id, user_id, title, status, COALESCE(category, ''), tags, data_sources,
-		        COALESCE(review_cadence, ''), COALESCE(summary, ''), metrics, steps,
+		        connectors, COALESCE(review_cadence, ''), COALESCE(summary, ''), metrics, steps,
 		        created_at, updated_at
 		 FROM user_plans
 		 WHERE user_id = $1 AND status NOT IN ('done', 'abandoned')
@@ -208,6 +218,7 @@ func (p *Postgres) ListActivePlans(ctx context.Context, userID string) ([]UserPl
 		var p UserPlan
 		var tagsRaw []byte
 		var dataSourcesRaw []byte
+		var connectorsRaw []byte
 		var metricsRaw []byte
 		var stepsRaw []byte
 		if err := rows.Scan(
@@ -218,6 +229,7 @@ func (p *Postgres) ListActivePlans(ctx context.Context, userID string) ([]UserPl
 			&p.Category,
 			&tagsRaw,
 			&dataSourcesRaw,
+			&connectorsRaw,
 			&p.ReviewCadence,
 			&p.Summary,
 			&metricsRaw,
@@ -234,6 +246,11 @@ func (p *Postgres) ListActivePlans(ctx context.Context, userID string) ([]UserPl
 		}
 		if len(dataSourcesRaw) > 0 {
 			if err := json.Unmarshal(dataSourcesRaw, &p.DataSources); err != nil {
+				return nil, err
+			}
+		}
+		if len(connectorsRaw) > 0 {
+			if err := json.Unmarshal(connectorsRaw, &p.Connectors); err != nil {
 				return nil, err
 			}
 		}

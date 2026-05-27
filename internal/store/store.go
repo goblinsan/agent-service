@@ -130,12 +130,22 @@ type UserPlan struct {
 	Category      string
 	Tags          []string
 	DataSources   []string
+	Connectors    []PlanConnector
 	ReviewCadence string
 	Summary       string
 	Metrics       map[string]any
 	Steps         []map[string]any
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+}
+
+// PlanConnector describes an external personal-data app that contributes to a
+// durable plan (for example Apple Health, Strava, or Lose It).
+type PlanConnector struct {
+	App        string
+	Type       string
+	Domain     string
+	ExternalID string
 }
 
 // ThreadSummary is a compact description of a chat thread (session) belonging

@@ -36,6 +36,8 @@ func (t *PlanIngestTextTool) Definition() Tool {
 			{Name: "category", Type: "string", Description: "Optional plan category such as work, health, finance, or social.", Required: false},
 			{Name: "tags", Type: "array", Description: "Optional list of free-form tags for grouping and filtering.", Required: false},
 			{Name: "data_sources", Type: "array", Description: "Optional list of systems or apps this plan depends on.", Required: false},
+			{Name: "connectors", Type: "array", Description: "Optional list of connector objects for personal data apps. Each object should include app (required) plus optional type, domain, and external_id.", Required: false},
+			{Name: "connector", Type: "object", Description: "Optional single connector object. Useful when ingesting a single app payload.", Required: false},
 			{Name: "review_cadence", Type: "string", Description: "Optional review cadence such as daily, weekday-morning, or weekly.", Required: false},
 			{Name: "metrics", Type: "object", Description: "Optional structured metrics map associated with the imported plan.", Required: false},
 			{Name: "source", Type: "string", Description: "Optional source label, for example the upstream system or document name.", Required: false},
@@ -90,6 +92,15 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 	if err != nil {
 		return nil, err
 	}
+	connectors, err := normalizePlanConnectors(params["connectors"])
+	if err != nil {
+		return nil, err
+	}
+	singleConnector, err := normalizeSinglePlanConnector(params["connector"])
+	if err != nil {
+		return nil, err
+	}
+	connectors = appendConnectorIfMissing(connectors, singleConnector)
 	reviewCadence, _ := params["review_cadence"].(string)
 	reviewCadence = strings.TrimSpace(reviewCadence)
 	metrics, err := normalizeObject(params["metrics"], "metrics")
@@ -102,6 +113,10 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 	if source != "" && !containsString(dataSources, source) {
 		dataSources = append(dataSources, source)
 	}
+	dataSources = mergeDataSourcesWithConnectors(dataSources, connectors)
+	if category == "" {
+		category = inferCategoryFromConnectors(connectors)
+	}
 
 	summary := derivePlanSummary(rawText, title, source)
 	steps := derivePlanSteps(rawText)
@@ -113,6 +128,7 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 		Category:      category,
 		Tags:          tags,
 		DataSources:   dataSources,
+		Connectors:    connectors,
 		ReviewCadence: reviewCadence,
 		Summary:       summary,
 		Metrics:       metrics,
@@ -132,6 +148,7 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 			"category":       plan.Category,
 			"tags":           plan.Tags,
 			"data_sources":   plan.DataSources,
+			"connectors":     plan.Connectors,
 			"review_cadence": plan.ReviewCadence,
 			"summary":        plan.Summary,
 			"metrics":        plan.Metrics,
@@ -288,4 +305,47 @@ func containsString(items []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeSinglePlanConnector(v any) (store.PlanConnector, error) {
+	if v == nil {
+		return store.PlanConnector{}, nil
+	}
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return store.PlanConnector{}, errors.New("connector must be an object")
+	}
+	connectors, err := normalizePlanConnectors([]any{obj})
+	if err != nil {
+		return store.PlanConnector{}, err
+	}
+	if len(connectors) == 0 {
+		return store.PlanConnector{}, nil
+	}
+	return connectors[0], nil
+}
+
+func appendConnectorIfMissing(connectors []store.PlanConnector, extra store.PlanConnector) []store.PlanConnector {
+	if strings.TrimSpace(extra.App) == "" {
+		return connectors
+	}
+	for _, c := range connectors {
+		if strings.EqualFold(strings.TrimSpace(c.App), strings.TrimSpace(extra.App)) &&
+			strings.EqualFold(strings.TrimSpace(c.Type), strings.TrimSpace(extra.Type)) &&
+			strings.EqualFold(strings.TrimSpace(c.Domain), strings.TrimSpace(extra.Domain)) {
+			return connectors
+		}
+	}
+	return append(connectors, extra)
+}
+
+func inferCategoryFromConnectors(connectors []store.PlanConnector) string {
+	for _, c := range connectors {
+		domain := strings.ToLower(strings.TrimSpace(c.Domain))
+		switch domain {
+		case "health", "nutrition":
+			return domain
+		}
+	}
+	return ""
 }
