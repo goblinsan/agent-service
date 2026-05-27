@@ -14,12 +14,103 @@ import (
 
 type scheduleStore interface {
 	CreateScheduledJob(ctx context.Context, job *store.ScheduledJob) error
+	ListScheduledJobs(ctx context.Context, userID string, limit int) ([]store.ScheduledJob, error)
 }
 
 var projectCheckinWindowTimes = map[string]string{
 	"morning":   "08:00",
 	"afternoon": "13:00",
 	"night":     "20:00",
+}
+
+// ScheduleListTool returns a concise list of the user's existing reminders
+// and recurring schedules so the model can answer "do I have a reminder..."
+// without creating new jobs or guessing from memory.
+type ScheduleListTool struct {
+	Store scheduleStore
+}
+
+func (t *ScheduleListTool) Definition() Tool {
+	return Tool{
+		Name:        "list_schedules",
+		Description: "List the current user's scheduled reminders and recurring check-ins. Use this when the user asks whether they already have a reminder, what is scheduled for tomorrow morning, or wants to review or reconcile upcoming scheduled jobs before creating a new one.",
+		Params: []Param{
+			{Name: "limit", Type: "int", Description: "Optional maximum number of schedules to return. Defaults to 25.", Required: false},
+			{Name: "kind", Type: "string", Description: "Optional kind filter, for example reminder or project_checkin.", Required: false},
+			{Name: "status", Type: "string", Description: "Optional status filter, for example pending, running, completed, or cancelled.", Required: false},
+		},
+	}
+}
+
+func (t *ScheduleListTool) Execute(ctx context.Context, params map[string]any) (any, error) {
+	if t.Store == nil {
+		return nil, errors.New("schedule store not configured")
+	}
+	userID := UserIDFromContext(ctx)
+	if userID == "" {
+		return map[string]any{"schedules": []any{}, "note": "no authenticated user on this run"}, nil
+	}
+
+	limit := 25
+	switch v := params["limit"].(type) {
+	case int:
+		if v > 0 {
+			limit = v
+		}
+	case int64:
+		if v > 0 {
+			limit = int(v)
+		}
+	case float64:
+		if v > 0 {
+			limit = int(v)
+		}
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	kindFilter, _ := params["kind"].(string)
+	kindFilter = strings.ToLower(strings.TrimSpace(kindFilter))
+	statusFilter, _ := params["status"].(string)
+	statusFilter = strings.ToLower(strings.TrimSpace(statusFilter))
+
+	schedules, err := t.Store.ListScheduledJobs(ctx, userID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list schedules: %w", err)
+	}
+
+	out := make([]map[string]any, 0, len(schedules))
+	for _, job := range schedules {
+		if kindFilter != "" && strings.ToLower(strings.TrimSpace(job.Kind)) != kindFilter {
+			continue
+		}
+		if statusFilter != "" && strings.ToLower(strings.TrimSpace(job.Status)) != statusFilter {
+			continue
+		}
+		out = append(out, map[string]any{
+			"id":         job.ID,
+			"kind":       job.Kind,
+			"prompt":     job.Prompt,
+			"run_at":     job.RunAt.Format(time.RFC3339),
+			"recurrence": job.Recurrence,
+			"timezone":   job.Timezone,
+			"status":     job.Status,
+			"thread_id":  job.ThreadID,
+			"agent_id":   job.AgentID,
+			"last_run_at": func() any {
+				if job.LastRunAt == nil {
+					return nil
+				}
+				return job.LastRunAt.Format(time.RFC3339)
+			}(),
+		})
+	}
+
+	return map[string]any{
+		"user_id":   userID,
+		"schedules": out,
+	}, nil
 }
 
 // ScheduleCreateTool creates a scheduled job for the current authenticated user.

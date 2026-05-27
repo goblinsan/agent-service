@@ -93,33 +93,41 @@ func (s *Service) ensureUserAndContext(ctx context.Context, userID string) []mod
 						milestoneStatus = "todo"
 					}
 					fmt.Fprintf(&b, "  - milestone (%s): %s\n", milestoneStatus, milestone.Title)
-					for j, task := range milestone.Tasks {
-						if j >= 2 {
-							fmt.Fprintf(&b, "    - ... %d more task(s)\n", len(milestone.Tasks)-j)
-							break
+					if len(milestone.Tasks) > 12 {
+						fmt.Fprintf(&b, "    - %d task(s)\n", len(milestone.Tasks))
+					} else {
+						for j, task := range milestone.Tasks {
+							if j >= 2 {
+								fmt.Fprintf(&b, "    - ... %d more task(s)\n", len(milestone.Tasks)-j)
+								break
+							}
+							taskStatus := strings.TrimSpace(task.Status)
+							if taskStatus == "" {
+								taskStatus = "todo"
+							}
+							fmt.Fprintf(&b, "    - (%s) %s\n", taskStatus, task.Title)
 						}
-						taskStatus := strings.TrimSpace(task.Status)
-						if taskStatus == "" {
-							taskStatus = "todo"
-						}
-						fmt.Fprintf(&b, "    - (%s) %s\n", taskStatus, task.Title)
 					}
 				}
 			} else {
-				for i, step := range p.Steps {
-					if i >= 5 {
-						fmt.Fprintf(&b, "  - ... %d more step(s)\n", len(p.Steps)-i)
-						break
+				if len(p.Steps) > 12 {
+					fmt.Fprintf(&b, "  - %d step(s)\n", len(p.Steps))
+				} else {
+					for i, step := range p.Steps {
+						if i >= 5 {
+							fmt.Fprintf(&b, "  - ... %d more step(s)\n", len(p.Steps)-i)
+							break
+						}
+						stepTitle, _ := step["title"].(string)
+						stepStatus, _ := step["status"].(string)
+						if strings.TrimSpace(stepTitle) == "" {
+							continue
+						}
+						if stepStatus == "" {
+							stepStatus = "todo"
+						}
+						fmt.Fprintf(&b, "  - (%s) %s\n", stepStatus, stepTitle)
 					}
-					stepTitle, _ := step["title"].(string)
-					stepStatus, _ := step["status"].(string)
-					if strings.TrimSpace(stepTitle) == "" {
-						continue
-					}
-					if stepStatus == "" {
-						stepStatus = "todo"
-					}
-					fmt.Fprintf(&b, "  - (%s) %s\n", stepStatus, stepTitle)
 				}
 			}
 			if len(p.Metrics) > 0 {
@@ -141,6 +149,7 @@ func (s *Service) ensureUserAndContext(ctx context.Context, userID string) []mod
 	b.WriteString("\nWhen the user shares personal data app updates (for example Apple Health, Strava, or nutrition trackers), call plan_ingest_text with connector/connectors metadata so health and nutrition goals stay current in durable plans.")
 	b.WriteString("\nFor structured HealthFit payloads, call healthfit_ingest_summary. For structured Lose It payloads, call loseit_ingest_summary. These tools update durable plans and append recent events so project-manager check-ins can reference current health and nutrition progress.")
 	b.WriteString("\nReminders and delayed follow-ups: when the user asks to be reminded later or wants something to happen at a future time, call create_schedule. Prefer delay_seconds for relative times like 'in 1 minute'. Do not use memory_write as a substitute for reminders.")
+	b.WriteString("\nWhen the user asks whether a reminder or check-in already exists, or asks what is scheduled tomorrow morning / later today, call list_schedules before creating anything new.")
 	b.WriteString("\nRecurring project-manager follow-ups: when the user wants regular morning, afternoon, or night check-ins about goals, progress, and next actions, call create_project_checkin instead of create_schedule.")
 	return []model.Message{{Role: model.RoleSystem, Content: b.String()}}
 }

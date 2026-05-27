@@ -10,12 +10,17 @@ import (
 
 type fakeScheduleStore struct {
 	created *store.ScheduledJob
+	listed  []store.ScheduledJob
 }
 
 func (f *fakeScheduleStore) CreateScheduledJob(_ context.Context, job *store.ScheduledJob) error {
 	copy := *job
 	f.created = &copy
 	return nil
+}
+
+func (f *fakeScheduleStore) ListScheduledJobs(_ context.Context, _ string, _ int) ([]store.ScheduledJob, error) {
+	return f.listed, nil
 }
 
 func TestScheduleCreateToolUsesDelayAndRunContextDefaults(t *testing.T) {

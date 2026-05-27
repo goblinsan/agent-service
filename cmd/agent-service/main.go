@@ -126,6 +126,9 @@ func main() {
 	if err := reg.Register(&tools.ScheduleCreateTool{Store: pg}); err != nil {
 		slog.Warn("register create_schedule", "error", err)
 	}
+	if err := reg.Register(&tools.ScheduleListTool{Store: pg}); err != nil {
+		slog.Warn("register list_schedules", "error", err)
+	}
 	if err := reg.Register(&tools.ProjectCheckinCreateTool{Store: pg}); err != nil {
 		slog.Warn("register create_project_checkin", "error", err)
 	}

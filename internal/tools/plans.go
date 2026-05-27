@@ -39,26 +39,97 @@ func (t *PlanListTool) Execute(ctx context.Context, _ map[string]any) (any, erro
 	}
 	out := make([]map[string]any, 0, len(plans))
 	for _, p := range plans {
-		out = append(out, map[string]any{
-			"id":             p.ID,
-			"title":          p.Title,
-			"status":         p.Status,
-			"vision":         p.Vision,
-			"target":         p.Target,
-			"category":       p.Category,
-			"tags":           p.Tags,
-			"data_sources":   p.DataSources,
-			"connectors":     p.Connectors,
-			"review_cadence": p.ReviewCadence,
-			"summary":        p.Summary,
-			"metrics":        p.Metrics,
-			"milestones":     p.Milestones,
-			"progress":       p.Progress,
-			"steps":          p.Steps,
-			"updated_at":     p.UpdatedAt,
-		})
+		out = append(out, summarizePlanForTool(p))
 	}
 	return map[string]any{"user_id": uid, "plans": out}, nil
+}
+
+func summarizePlanForTool(p store.UserPlan) map[string]any {
+	const maxMilestones = 4
+	const maxTasksPerMilestone = 3
+	const maxSteps = 6
+
+	milestones := make([]map[string]any, 0, minInt(len(p.Milestones), maxMilestones))
+	for i, milestone := range p.Milestones {
+		if i >= maxMilestones {
+			break
+		}
+		entry := map[string]any{
+			"id":      milestone.ID,
+			"title":   milestone.Title,
+			"status":  milestone.Status,
+			"summary": milestone.Summary,
+		}
+		taskCount := len(milestone.Tasks)
+		if taskCount > 0 && taskCount <= 12 {
+			tasks := make([]map[string]any, 0, minInt(taskCount, maxTasksPerMilestone))
+			for j, task := range milestone.Tasks {
+				if j >= maxTasksPerMilestone {
+					break
+				}
+				tasks = append(tasks, map[string]any{
+					"id":     task.ID,
+					"title":  task.Title,
+					"status": task.Status,
+					"notes":  task.Notes,
+				})
+			}
+			entry["tasks"] = tasks
+			if taskCount > maxTasksPerMilestone {
+				entry["more_tasks"] = taskCount - maxTasksPerMilestone
+			}
+		} else if taskCount > 0 {
+			entry["task_count"] = taskCount
+		}
+		milestones = append(milestones, entry)
+	}
+
+	steps := make([]map[string]any, 0, minInt(len(p.Steps), maxSteps))
+	if len(p.Milestones) == 0 && len(p.Steps) <= 12 {
+		for i, step := range p.Steps {
+			if i >= maxSteps {
+				break
+			}
+			steps = append(steps, step)
+		}
+	}
+
+	out := map[string]any{
+		"id":             p.ID,
+		"title":          p.Title,
+		"status":         p.Status,
+		"vision":         p.Vision,
+		"target":         p.Target,
+		"category":       p.Category,
+		"tags":           p.Tags,
+		"data_sources":   p.DataSources,
+		"connectors":     p.Connectors,
+		"review_cadence": p.ReviewCadence,
+		"summary":        p.Summary,
+		"metrics":        p.Metrics,
+		"progress":       p.Progress,
+		"updated_at":     p.UpdatedAt,
+	}
+	if len(milestones) > 0 {
+		out["milestones"] = milestones
+		if len(p.Milestones) > maxMilestones {
+			out["more_milestones"] = len(p.Milestones) - maxMilestones
+		}
+	}
+	if len(steps) > 0 {
+		out["steps"] = steps
+		if len(p.Steps) > maxSteps {
+			out["more_steps"] = len(p.Steps) - maxSteps
+		}
+	}
+	return out
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // PlanUpsertTool creates or updates a goal/plan for the current user.

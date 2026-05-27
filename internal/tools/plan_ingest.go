@@ -10,13 +10,45 @@ import (
 	"strings"
 
 	"github.com/goblinsan/agent-service/internal/store"
+	"gopkg.in/yaml.v3"
 )
 
 var (
 	checkboxStepPattern = regexp.MustCompile(`^\s*[-*]\s*\[(?P<mark>[ xX])\]\s*(?P<body>.+)$`)
 	bulletStepPattern   = regexp.MustCompile(`^\s*(?:[-*•]|\d+[.)])\s+(?P<body>.+)$`)
 	headingPattern      = regexp.MustCompile(`^\s{0,3}#{1,6}\s+(.+)$`)
+	actionSectionPattern = regexp.MustCompile(`(?i)(week|phase|milestone|checklist|workout|run|ride|tempo|strength|recovery|baseline|test|assessment|goal|schedule|prep)`)
+	infoSectionPattern   = regexp.MustCompile(`(?i)(current baseline|metrics|recovery priorities|important reminder|core principles|success metrics)`)
 )
+
+type structuredPlanDocument struct {
+	Title         string                     `yaml:"title" json:"title"`
+	Vision        string                     `yaml:"vision" json:"vision"`
+	Target        string                     `yaml:"target" json:"target"`
+	Summary       string                     `yaml:"summary" json:"summary"`
+	Category      string                     `yaml:"category" json:"category"`
+	Tags          []string                   `yaml:"tags" json:"tags"`
+	DataSources   []string                   `yaml:"data_sources" json:"data_sources"`
+	ReviewCadence string                     `yaml:"review_cadence" json:"review_cadence"`
+	Metrics       map[string]any             `yaml:"metrics" json:"metrics"`
+	Milestones    []structuredPlanMilestone  `yaml:"milestones" json:"milestones"`
+	Steps         []map[string]any           `yaml:"steps" json:"steps"`
+}
+
+type structuredPlanMilestone struct {
+	ID      string               `yaml:"id" json:"id"`
+	Title   string               `yaml:"title" json:"title"`
+	Status  string               `yaml:"status" json:"status"`
+	Summary string               `yaml:"summary" json:"summary"`
+	Tasks   []structuredPlanTask `yaml:"tasks" json:"tasks"`
+}
+
+type structuredPlanTask struct {
+	ID     string `yaml:"id" json:"id"`
+	Title  string `yaml:"title" json:"title"`
+	Status string `yaml:"status" json:"status"`
+	Notes  string `yaml:"notes" json:"notes"`
+}
 
 // PlanIngestTextTool converts pasted plain-text or markdown plan documents into
 // durable user_plans rows so other agents/systems can seed upcoming work.
@@ -120,6 +152,39 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 
 	summary := derivePlanSummary(rawText, title, source)
 	steps := derivePlanSteps(rawText)
+	var milestones []store.UserPlanMilestone
+	if doc, ok := parseStructuredPlanDocument(rawText); ok {
+		if strings.TrimSpace(doc.Title) != "" {
+			title = strings.TrimSpace(doc.Title)
+		}
+		if strings.TrimSpace(doc.Summary) != "" {
+			summary = strings.TrimSpace(doc.Summary)
+		}
+		if category == "" {
+			category = strings.TrimSpace(doc.Category)
+		}
+		if len(tags) == 0 && len(doc.Tags) > 0 {
+			tags = doc.Tags
+		}
+		if len(dataSources) == 0 && len(doc.DataSources) > 0 {
+			dataSources = doc.DataSources
+		}
+		if reviewCadence == "" {
+			reviewCadence = strings.TrimSpace(doc.ReviewCadence)
+		}
+		if len(metrics) == 0 && len(doc.Metrics) > 0 {
+			metrics = doc.Metrics
+		}
+		milestones = structuredMilestonesToStore(doc.Milestones)
+		if len(doc.Steps) > 0 {
+			steps = doc.Steps
+		}
+	} else {
+		milestones = derivePlanMilestones(rawText)
+		if len(milestones) > 0 {
+			steps = nil
+		}
+	}
 	plan := &store.UserPlan{
 		ID:            id,
 		UserID:        uid,
@@ -133,6 +198,7 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 		ReviewCadence: reviewCadence,
 		Summary:       summary,
 		Metrics:       metrics,
+		Milestones:    milestones,
 		Steps:         steps,
 	}
 	store.NormalizeUserPlan(plan)
@@ -259,6 +325,171 @@ func derivePlanSteps(raw string) []map[string]any {
 		}
 	}
 	return steps
+}
+
+func parseStructuredPlanDocument(raw string) (structuredPlanDocument, bool) {
+	var doc structuredPlanDocument
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return doc, false
+	}
+	if !strings.Contains(trimmed, "title:") && !strings.Contains(trimmed, "\"title\"") {
+		return doc, false
+	}
+	if err := yaml.Unmarshal([]byte(trimmed), &doc); err != nil {
+		return structuredPlanDocument{}, false
+	}
+	if strings.TrimSpace(doc.Title) == "" {
+		return structuredPlanDocument{}, false
+	}
+	return doc, true
+}
+
+func structuredMilestonesToStore(input []structuredPlanMilestone) []store.UserPlanMilestone {
+	out := make([]store.UserPlanMilestone, 0, len(input))
+	for i, milestone := range input {
+		title := strings.TrimSpace(milestone.Title)
+		if title == "" {
+			continue
+		}
+		id := strings.TrimSpace(milestone.ID)
+		if id == "" {
+			id = fmt.Sprintf("m%d", i+1)
+		}
+		tasks := make([]store.UserPlanTask, 0, len(milestone.Tasks))
+		for j, task := range milestone.Tasks {
+			taskTitle := strings.TrimSpace(task.Title)
+			if taskTitle == "" {
+				continue
+			}
+			taskID := strings.TrimSpace(task.ID)
+			if taskID == "" {
+				taskID = fmt.Sprintf("%s-t%d", id, j+1)
+			}
+			tasks = append(tasks, store.UserPlanTask{
+				ID:     taskID,
+				Title:  taskTitle,
+				Status: firstNonEmptyString(strings.TrimSpace(task.Status), "todo"),
+				Notes:  strings.TrimSpace(task.Notes),
+			})
+		}
+		out = append(out, store.UserPlanMilestone{
+			ID:      id,
+			Title:   title,
+			Status:  firstNonEmptyString(strings.TrimSpace(milestone.Status), "todo"),
+			Summary: strings.TrimSpace(milestone.Summary),
+			Tasks:   tasks,
+		})
+	}
+	return out
+}
+
+func derivePlanMilestones(raw string) []store.UserPlanMilestone {
+	const maxMilestones = 8
+	const maxTasksPerMilestone = 6
+
+	type section struct {
+		title string
+		lines []string
+	}
+	sections := make([]section, 0, 8)
+	current := section{}
+
+	for _, line := range strings.Split(raw, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if match := headingPattern.FindStringSubmatch(trimmed); len(match) == 2 {
+			if current.title != "" {
+				sections = append(sections, current)
+			}
+			current = section{title: trimTitle(match[1])}
+			continue
+		}
+		if current.title == "" {
+			continue
+		}
+		current.lines = append(current.lines, trimmed)
+	}
+	if current.title != "" {
+		sections = append(sections, current)
+	}
+
+	out := make([]store.UserPlanMilestone, 0, maxMilestones)
+	for _, section := range sections {
+		if len(out) >= maxMilestones {
+			break
+		}
+		title := strings.TrimSpace(section.title)
+		if title == "" || strings.EqualFold(title, derivePlanTitle(raw)) {
+			continue
+		}
+
+		milestone := store.UserPlanMilestone{
+			ID:     fmt.Sprintf("m%d", len(out)+1),
+			Title:  title,
+			Status: "todo",
+		}
+		if infoSectionPattern.MatchString(title) {
+			milestone.Summary = strings.Join(section.lines, " ")
+			if len(milestone.Summary) > 240 {
+				milestone.Summary = milestone.Summary[:240] + "..."
+			}
+			out = append(out, milestone)
+			continue
+		}
+		if !actionSectionPattern.MatchString(title) {
+			continue
+		}
+
+		tasks := make([]store.UserPlanTask, 0, maxTasksPerMilestone)
+		for _, line := range section.lines {
+			var body string
+			switch {
+			case checkboxStepPattern.MatchString(line):
+				match := checkboxStepPattern.FindStringSubmatch(line)
+				if len(match) == 3 {
+					body = strings.TrimSpace(match[2])
+				}
+			case bulletStepPattern.MatchString(line):
+				match := bulletStepPattern.FindStringSubmatch(line)
+				if len(match) == 2 {
+					body = strings.TrimSpace(match[1])
+				}
+			}
+			if body == "" {
+				continue
+			}
+			tasks = append(tasks, store.UserPlanTask{
+				ID:     fmt.Sprintf("%s-t%d", milestone.ID, len(tasks)+1),
+				Title:  body,
+				Status: inferStepStatus(body),
+			})
+			if len(tasks) >= maxTasksPerMilestone {
+				break
+			}
+		}
+		if len(tasks) == 0 && len(section.lines) > 0 {
+			milestone.Summary = strings.Join(section.lines, " ")
+			if len(milestone.Summary) > 240 {
+				milestone.Summary = milestone.Summary[:240] + "..."
+			}
+		} else {
+			milestone.Tasks = tasks
+		}
+		out = append(out, milestone)
+	}
+	return out
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func inferStepStatus(body string) string {
