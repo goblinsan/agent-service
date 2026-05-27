@@ -123,19 +123,51 @@ type UserEvent struct {
 // UserPlan is a durable goal/plan attached to a user, with optional structured
 // steps. Status is a free-form label ("draft", "active", "done", "abandoned").
 type UserPlan struct {
-	ID            string
-	UserID        string
-	Title         string
-	Status        string
-	Category      string
-	Tags          []string
-	DataSources   []string
-	ReviewCadence string
-	Summary       string
-	Metrics       map[string]any
-	Steps         []map[string]any
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID            string              `json:"id"`
+	UserID        string              `json:"user_id"`
+	Title         string              `json:"title"`
+	Status        string              `json:"status"`
+	Vision        string              `json:"vision"`
+	Target        string              `json:"target"`
+	Category      string              `json:"category"`
+	Tags          []string            `json:"tags"`
+	DataSources   []string            `json:"data_sources"`
+	ReviewCadence string              `json:"review_cadence"`
+	Summary       string              `json:"summary"`
+	Metrics       map[string]any      `json:"metrics"`
+	Milestones    []UserPlanMilestone `json:"milestones"`
+	Progress      UserPlanProgress    `json:"progress"`
+	Steps         []map[string]any    `json:"steps"`
+	CreatedAt     time.Time           `json:"created_at"`
+	UpdatedAt     time.Time           `json:"updated_at"`
+}
+
+type UserPlanMilestone struct {
+	ID         string         `json:"id"`
+	Title      string         `json:"title"`
+	Status     string         `json:"status"`
+	Summary    string         `json:"summary"`
+	TargetDate *time.Time     `json:"target_date,omitempty"`
+	Tasks      []UserPlanTask `json:"tasks"`
+}
+
+type UserPlanTask struct {
+	ID          string     `json:"id"`
+	Title       string     `json:"title"`
+	Status      string     `json:"status"`
+	Notes       string     `json:"notes"`
+	DueAt       *time.Time `json:"due_at,omitempty"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+}
+
+type UserPlanProgress struct {
+	MilestoneCount      int        `json:"milestone_count"`
+	CompletedMilestones int        `json:"completed_milestones"`
+	TaskCount           int        `json:"task_count"`
+	CompletedTasks      int        `json:"completed_tasks"`
+	PercentComplete     float64    `json:"percent_complete"`
+	IsStale             bool       `json:"is_stale"`
+	NextReviewAt        *time.Time `json:"next_review_at,omitempty"`
 }
 
 // ThreadSummary is a compact description of a chat thread (session) belonging
@@ -228,6 +260,8 @@ type Store interface {
 	ListRecentUserEvents(ctx context.Context, userID string, limit int) ([]UserEvent, error)
 	UpsertUserPlan(ctx context.Context, p *UserPlan) error
 	ListActivePlans(ctx context.Context, userID string) ([]UserPlan, error)
+	GetUserPlan(ctx context.Context, userID, planID string) (*UserPlan, error)
+	DeleteUserPlan(ctx context.Context, userID, planID string) error
 
 	// Per-user notifications inbox.
 	CreateNotification(ctx context.Context, n *Notification) error

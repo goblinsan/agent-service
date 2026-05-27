@@ -150,6 +150,39 @@ func TestPlanUpsertUpdatesWhenIDProvided(t *testing.T) {
 	}
 }
 
+func TestPlanUpsertPersistsMilestonesAndRollup(t *testing.T) {
+	fs := &fakePlanStore{}
+	tool := &PlanUpsertTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+	_, err := tool.Execute(ctx, map[string]any{
+		"title":  "Exit corp",
+		"vision": "Operate a profitable independent studio",
+		"target": "$1k/day by Q4",
+		"milestones": []any{
+			map[string]any{
+				"title": "Acquire pipeline",
+				"tasks": []any{
+					map[string]any{"title": "Publish offer", "status": "done"},
+					map[string]any{"title": "Close first client", "status": "todo"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := fs.upserts[0]
+	if plan.Vision == "" || plan.Target == "" {
+		t.Fatalf("expected vision/target to persist: %+v", plan)
+	}
+	if len(plan.Milestones) != 1 || len(plan.Milestones[0].Tasks) != 2 {
+		t.Fatalf("unexpected milestones: %+v", plan.Milestones)
+	}
+	if got := plan.Progress.PercentComplete; got != 50 {
+		t.Fatalf("expected 50%% completion, got %v", got)
+	}
+}
+
 func TestPlanUpsertRequiresTitle(t *testing.T) {
 	tool := &PlanUpsertTool{Store: &fakePlanStore{}}
 	ctx := WithUserID(context.Background(), "u1")
@@ -266,5 +299,25 @@ func TestPlanIngestTextUsesExistingIDWhenProvided(t *testing.T) {
 	}
 	if got := fs.upserts[0].ID; got != "plan-123" {
 		t.Errorf("expected plan id plan-123, got %q", got)
+	}
+}
+
+func TestPlanIngestTextBuildsMilestonesForBackwardCompatibility(t *testing.T) {
+	fs := &fakePlanStore{}
+	tool := &PlanIngestTextTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+	_, err := tool.Execute(ctx, map[string]any{
+		"title": "Roadmap",
+		"text":  "Roadmap\n\n- [x] Setup store\n- [ ] Add APIs",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := fs.upserts[0]
+	if len(plan.Milestones) != 1 || len(plan.Milestones[0].Tasks) != 2 {
+		t.Fatalf("expected milestones derived from steps, got %+v", plan.Milestones)
+	}
+	if plan.Progress.TaskCount != 2 || plan.Progress.CompletedTasks != 1 {
+		t.Fatalf("unexpected progress %+v", plan.Progress)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/goblinsan/agent-service/internal/store"
 )
@@ -20,7 +21,7 @@ type PlanListTool struct {
 func (t *PlanListTool) Definition() Tool {
 	return Tool{
 		Name:        "plan_list",
-		Description: "Returns the current user's active goals and plans (status not 'done' or 'abandoned'). Each plan has an id, title, status, optional category/tags/data sources/review cadence, summary, metrics, and ordered steps. Use this before creating a new plan to avoid duplicates and to recall the id you need for plan_upsert.",
+		Description: "Returns the current user's active goals and plans (status not 'done' or 'abandoned'). Each plan has an id, title, status, optional vision/target, milestones with tasks, roll-up progress, and compatibility fields like summary/metrics/steps. Use this before creating a new plan to avoid duplicates and to recall the id you need for plan_upsert.",
 	}
 }
 
@@ -42,12 +43,16 @@ func (t *PlanListTool) Execute(ctx context.Context, _ map[string]any) (any, erro
 			"id":             p.ID,
 			"title":          p.Title,
 			"status":         p.Status,
+			"vision":         p.Vision,
+			"target":         p.Target,
 			"category":       p.Category,
 			"tags":           p.Tags,
 			"data_sources":   p.DataSources,
 			"review_cadence": p.ReviewCadence,
 			"summary":        p.Summary,
 			"metrics":        p.Metrics,
+			"milestones":     p.Milestones,
+			"progress":       p.Progress,
 			"steps":          p.Steps,
 			"updated_at":     p.UpdatedAt,
 		})
@@ -63,17 +68,20 @@ type PlanUpsertTool struct {
 func (t *PlanUpsertTool) Definition() Tool {
 	return Tool{
 		Name:        "plan_upsert",
-		Description: "Create or update a durable goal/plan for the current user. Omit 'id' to create a new plan; pass an existing id (from plan_list) to update one. Use this when the user states a goal, agrees to a multi-step commitment, or asks you to track progress. Mark a plan 'done' or 'abandoned' to remove it from the active list.",
+		Description: "Create or update a durable goal/plan for the current user. Omit 'id' to create a new plan; pass an existing id (from plan_list) to update one. Supports a top-level vision/target, milestones, milestone tasks, and computed roll-up progress.",
 		Params: []Param{
 			{Name: "id", Type: "string", Description: "Existing plan id from plan_list. Omit to create a new plan.", Required: false},
 			{Name: "title", Type: "string", Description: "Short title for the goal/plan (e.g. 'Exit corp gig — $1k/day').", Required: true},
 			{Name: "status", Type: "string", Description: "One of: draft, active, paused, done, abandoned. Defaults to 'active' on create.", Required: false},
+			{Name: "vision", Type: "string", Description: "Optional long-horizon vision statement that explains the desired future state.", Required: false},
+			{Name: "target", Type: "string", Description: "Optional concrete target outcome, KPI, or deadline objective.", Required: false},
 			{Name: "category", Type: "string", Description: "Optional plan category such as work, health, finance, or social.", Required: false},
 			{Name: "tags", Type: "array", Description: "Optional list of free-form tags for filtering and grouping.", Required: false},
 			{Name: "data_sources", Type: "array", Description: "Optional list of systems or apps this plan depends on, for example apple-health, strava, loseit, budget-sheet, or github.", Required: false},
 			{Name: "review_cadence", Type: "string", Description: "Optional human-readable review cadence such as daily, weekday-morning, weekly, or quarterly.", Required: false},
 			{Name: "summary", Type: "string", Description: "One- or two-sentence description of the goal and why it matters.", Required: false},
 			{Name: "metrics", Type: "object", Description: "Optional structured metrics map, for example {\"target_workouts_per_week\":4,\"weekly_budget_usd\":500}.", Required: false},
+			{Name: "milestones", Type: "array", Description: "Optional ordered milestone objects. Each milestone is {\"id\":\"...\",\"title\":\"...\",\"status\":\"todo|doing|done|blocked\",\"summary\":\"...\",\"target_date\":\"RFC3339(optional)\",\"tasks\":[{\"id\":\"...\",\"title\":\"...\",\"status\":\"todo|doing|done|blocked\",\"notes\":\"...\",\"due_at\":\"RFC3339(optional)\"}]}.", Required: false},
 			{Name: "steps", Type: "array", Description: "Ordered list of step objects. Each step is an object like {\"title\":\"...\",\"status\":\"todo|doing|done\",\"notes\":\"...\"}. Pass the full revised list when updating.", Required: false},
 		},
 	}
@@ -109,6 +117,10 @@ func (t *PlanUpsertTool) Execute(ctx context.Context, params map[string]any) (an
 		}
 	}
 	summary, _ := params["summary"].(string)
+	vision, _ := params["vision"].(string)
+	vision = strings.TrimSpace(vision)
+	target, _ := params["target"].(string)
+	target = strings.TrimSpace(target)
 	category, _ := params["category"].(string)
 	category = strings.TrimSpace(category)
 	tags, err := normalizeStringList(params["tags"], "tags")
@@ -125,6 +137,10 @@ func (t *PlanUpsertTool) Execute(ctx context.Context, params map[string]any) (an
 	if err != nil {
 		return nil, err
 	}
+	milestones, err := normalizePlanMilestones(params["milestones"])
+	if err != nil {
+		return nil, err
+	}
 
 	steps, err := normalizePlanSteps(params["steps"])
 	if err != nil {
@@ -136,14 +152,18 @@ func (t *PlanUpsertTool) Execute(ctx context.Context, params map[string]any) (an
 		UserID:        uid,
 		Title:         title,
 		Status:        status,
+		Vision:        vision,
+		Target:        target,
 		Category:      category,
 		Tags:          tags,
 		DataSources:   dataSources,
 		ReviewCadence: reviewCadence,
 		Summary:       summary,
 		Metrics:       metrics,
+		Milestones:    milestones,
 		Steps:         steps,
 	}
+	store.NormalizeUserPlan(plan)
 	if err := t.Store.UpsertUserPlan(ctx, plan); err != nil {
 		return nil, fmt.Errorf("upsert plan: %w", err)
 	}
@@ -154,12 +174,16 @@ func (t *PlanUpsertTool) Execute(ctx context.Context, params map[string]any) (an
 			"id":             plan.ID,
 			"title":          plan.Title,
 			"status":         plan.Status,
+			"vision":         plan.Vision,
+			"target":         plan.Target,
 			"category":       plan.Category,
 			"tags":           plan.Tags,
 			"data_sources":   plan.DataSources,
 			"review_cadence": plan.ReviewCadence,
 			"summary":        plan.Summary,
 			"metrics":        plan.Metrics,
+			"milestones":     plan.Milestones,
+			"progress":       plan.Progress,
 			"steps":          plan.Steps,
 		},
 	}, nil
@@ -250,6 +274,117 @@ func normalizePlanSteps(v any) ([]map[string]any, error) {
 		out = append(out, obj)
 	}
 	return out, nil
+}
+
+func normalizePlanMilestones(v any) ([]store.UserPlanMilestone, error) {
+	if v == nil {
+		return nil, nil
+	}
+	if s, ok := v.(string); ok {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil, nil
+		}
+		var decoded any
+		if err := json.Unmarshal([]byte(s), &decoded); err != nil {
+			return nil, fmt.Errorf("milestones string is not valid JSON: %w", err)
+		}
+		v = decoded
+	}
+	raw, ok := v.([]any)
+	if !ok {
+		return nil, errors.New("milestones must be an array of objects")
+	}
+	out := make([]store.UserPlanMilestone, 0, len(raw))
+	for i, item := range raw {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("milestones[%d] must be an object", i)
+		}
+		title, _ := obj["title"].(string)
+		title = strings.TrimSpace(title)
+		if title == "" {
+			return nil, fmt.Errorf("milestones[%d].title is required", i)
+		}
+		m := store.UserPlanMilestone{
+			Title:   title,
+			Status:  normalizePlanState(asString(obj["status"]), "todo"),
+			Summary: strings.TrimSpace(asString(obj["summary"])),
+			ID:      strings.TrimSpace(asString(obj["id"])),
+		}
+		if targetDate, ok := parseOptionalRFC3339(asString(obj["target_date"])); ok {
+			m.TargetDate = &targetDate
+		}
+		tasks, err := normalizePlanTasks(obj["tasks"], i)
+		if err != nil {
+			return nil, err
+		}
+		m.Tasks = tasks
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+func normalizePlanTasks(v any, milestoneIndex int) ([]store.UserPlanTask, error) {
+	if v == nil {
+		return nil, nil
+	}
+	raw, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("milestones[%d].tasks must be an array", milestoneIndex)
+	}
+	out := make([]store.UserPlanTask, 0, len(raw))
+	for i, item := range raw {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("milestones[%d].tasks[%d] must be an object", milestoneIndex, i)
+		}
+		title := strings.TrimSpace(asString(obj["title"]))
+		if title == "" {
+			return nil, fmt.Errorf("milestones[%d].tasks[%d].title is required", milestoneIndex, i)
+		}
+		task := store.UserPlanTask{
+			ID:     strings.TrimSpace(asString(obj["id"])),
+			Title:  title,
+			Status: normalizePlanState(asString(obj["status"]), "todo"),
+			Notes:  strings.TrimSpace(asString(obj["notes"])),
+		}
+		if dueAt, ok := parseOptionalRFC3339(asString(obj["due_at"])); ok {
+			task.DueAt = &dueAt
+		}
+		if completedAt, ok := parseOptionalRFC3339(asString(obj["completed_at"])); ok {
+			task.CompletedAt = &completedAt
+		}
+		out = append(out, task)
+	}
+	return out, nil
+}
+
+func parseOptionalRFC3339(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t.UTC(), true
+}
+
+func asString(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func normalizePlanState(status, fallback string) string {
+	normalized := strings.ToLower(strings.TrimSpace(status))
+	switch normalized {
+	case "todo", "doing", "done", "blocked", "paused", "active":
+		return normalized
+	default:
+		return fallback
+	}
 }
 
 func newPlanID() string {

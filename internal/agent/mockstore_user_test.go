@@ -32,6 +32,12 @@ func (m *mockStore) ListActivePlans(_ context.Context, _ string) ([]store.UserPl
 	return nil, nil
 }
 
+func (m *mockStore) GetUserPlan(_ context.Context, _, _ string) (*store.UserPlan, error) {
+	return nil, store.ErrNotFound
+}
+
+func (m *mockStore) DeleteUserPlan(_ context.Context, _, _ string) error { return store.ErrNotFound }
+
 func (m *mockStore) CreateNotification(_ context.Context, _ *store.Notification) error { return nil }
 func (m *mockStore) ListNotifications(_ context.Context, _ string, _ bool, _ int) ([]store.Notification, error) {
 	return nil, nil

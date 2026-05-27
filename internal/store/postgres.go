@@ -11,6 +11,10 @@ import (
 // ErrNotFound is returned when a requested record does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrForbidden is returned when the caller attempts to access another user's
+// scoped record.
+var ErrForbidden = errors.New("forbidden")
+
 type Postgres struct {
 	db *sql.DB
 }
