@@ -885,19 +885,26 @@ func upsertPlanHandler(svc *service.Service) http.HandlerFunc {
 			return
 		}
 		var req struct {
-			ID            string                    `json:"id"`
-			Title         string                    `json:"title"`
-			Status        string                    `json:"status"`
-			Vision        string                    `json:"vision"`
-			Target        string                    `json:"target"`
-			Category      string                    `json:"category"`
-			Tags          []string                  `json:"tags"`
-			DataSources   []string                  `json:"data_sources"`
-			ReviewCadence string                    `json:"review_cadence"`
-			Summary       string                    `json:"summary"`
-			Metrics       map[string]any            `json:"metrics"`
-			Milestones    []store.UserPlanMilestone `json:"milestones"`
-			Steps         []map[string]any          `json:"steps"`
+			ID                 string                        `json:"id"`
+			Title              string                        `json:"title"`
+			Status             string                        `json:"status"`
+			Vision             string                        `json:"vision"`
+			Target             string                        `json:"target"`
+			Category           string                        `json:"category"`
+			Objectives         []string                      `json:"objectives"`
+			Principles         []string                      `json:"principles"`
+			Tags               []string                      `json:"tags"`
+			DataSources        []string                      `json:"data_sources"`
+			ReviewCadence      string                        `json:"review_cadence"`
+			Summary            string                        `json:"summary"`
+			Metrics            map[string]any                `json:"metrics"`
+			TrackedMetrics     []store.PlanTrackedMetric     `json:"tracked_metrics"`
+			BaselineFacts      []store.PlanFact              `json:"baseline_facts"`
+			SuccessCriteria    []string                      `json:"success_criteria"`
+			Cadence            []store.PlanCadenceEntry      `json:"cadence"`
+			SupportingSections []store.PlanSupportingSection `json:"supporting_sections"`
+			Milestones         []store.UserPlanMilestone     `json:"milestones"`
+			Steps              []map[string]any              `json:"steps"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -912,20 +919,27 @@ func upsertPlanHandler(svc *service.Service) http.HandlerFunc {
 			req.ID = newID()
 		}
 		plan := &store.UserPlan{
-			ID:            strings.TrimSpace(req.ID),
-			UserID:        userID,
-			Title:         strings.TrimSpace(req.Title),
-			Status:        strings.TrimSpace(req.Status),
-			Vision:        strings.TrimSpace(req.Vision),
-			Target:        strings.TrimSpace(req.Target),
-			Category:      strings.TrimSpace(req.Category),
-			Tags:          req.Tags,
-			DataSources:   req.DataSources,
-			ReviewCadence: strings.TrimSpace(req.ReviewCadence),
-			Summary:       strings.TrimSpace(req.Summary),
-			Metrics:       req.Metrics,
-			Milestones:    req.Milestones,
-			Steps:         req.Steps,
+			ID:                 strings.TrimSpace(req.ID),
+			UserID:             userID,
+			Title:              strings.TrimSpace(req.Title),
+			Status:             strings.TrimSpace(req.Status),
+			Vision:             strings.TrimSpace(req.Vision),
+			Target:             strings.TrimSpace(req.Target),
+			Category:           strings.TrimSpace(req.Category),
+			Objectives:         req.Objectives,
+			Principles:         req.Principles,
+			Tags:               req.Tags,
+			DataSources:        req.DataSources,
+			ReviewCadence:      strings.TrimSpace(req.ReviewCadence),
+			Summary:            strings.TrimSpace(req.Summary),
+			Metrics:            req.Metrics,
+			TrackedMetrics:     req.TrackedMetrics,
+			BaselineFacts:      req.BaselineFacts,
+			SuccessCriteria:    req.SuccessCriteria,
+			Cadence:            req.Cadence,
+			SupportingSections: req.SupportingSections,
+			Milestones:         req.Milestones,
+			Steps:              req.Steps,
 		}
 		if err := svc.UpsertUserPlan(r.Context(), plan); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
@@ -959,17 +973,17 @@ func importPlanHandler(svc *service.Service) http.HandlerFunc {
 			return
 		}
 		var req struct {
-			ID            string         `json:"id"`
-			Title         string         `json:"title"`
-			Text          string         `json:"text"`
-			Status        string         `json:"status"`
-			Category      string         `json:"category"`
-			Tags          []string       `json:"tags"`
-			DataSources   []string       `json:"data_sources"`
+			ID            string                `json:"id"`
+			Title         string                `json:"title"`
+			Text          string                `json:"text"`
+			Status        string                `json:"status"`
+			Category      string                `json:"category"`
+			Tags          []string              `json:"tags"`
+			DataSources   []string              `json:"data_sources"`
 			Connectors    []store.PlanConnector `json:"connectors"`
-			ReviewCadence string         `json:"review_cadence"`
-			Metrics       map[string]any `json:"metrics"`
-			Source        string         `json:"source"`
+			ReviewCadence string                `json:"review_cadence"`
+			Metrics       map[string]any        `json:"metrics"`
+			Source        string                `json:"source"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)

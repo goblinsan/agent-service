@@ -1,6 +1,14 @@
 title: 1-Month Endurance Baseline Build
+vision: Build endurance and race readiness over four weeks.
+target: 1-month baseline endurance block
 summary: Build endurance and race readiness over four weeks.
 category: health
+objectives:
+  - Improve aerobic capacity without overtraining.
+  - Establish a repeatable weekly run and ride rhythm.
+principles:
+  - Most sessions should feel easy and sustainable.
+  - Measure progress with repeatable benchmarks.
 tags:
   - endurance
   - running
@@ -13,6 +21,36 @@ metrics:
   target_10k_pace: "7:00/mile"
   target_cycling_endurance: "25 miles @ 16+ mph"
   recovery_goal: consistent
+tracked_metrics:
+  - name: Distance
+    notes: Total miles for each session.
+    cadence: after_every_session
+  - name: Average HR
+    notes: Capture when available.
+    cadence: after_every_session
+baseline_facts:
+  - label: Current run pace
+    value: "~8:30/mile capability"
+  - label: Current cycling
+    value: "30 miles @ 14 mph"
+success_criteria:
+  - Complete the full four-week block without injury.
+  - Finish with comparable benchmark data against the starting baseline.
+cadence:
+  - day: Monday
+    activity: Easy Run + Mobility
+  - day: Saturday
+    activity: Long Ride
+supporting_sections:
+  - title: Recovery Principles
+    kind: guidance
+    items:
+      - label: Sleep quality
+        kind: note
+        content: Track sleep and daily energy to manage fatigue.
+      - label: Recovery checklist
+        kind: uri
+        uri: s3://<bucket>/<prefix>/recovery-checklist.md
 milestones:
   - title: Week 1 base volume
     summary: Establish consistent aerobic training and recovery.

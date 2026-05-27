@@ -14,25 +14,67 @@ import (
 )
 
 var (
-	checkboxStepPattern = regexp.MustCompile(`^\s*[-*]\s*\[(?P<mark>[ xX])\]\s*(?P<body>.+)$`)
-	bulletStepPattern   = regexp.MustCompile(`^\s*(?:[-*•]|\d+[.)])\s+(?P<body>.+)$`)
-	headingPattern      = regexp.MustCompile(`^\s{0,3}#{1,6}\s+(.+)$`)
+	checkboxStepPattern  = regexp.MustCompile(`^\s*[-*]\s*\[(?P<mark>[ xX])\]\s*(?P<body>.+)$`)
+	bulletStepPattern    = regexp.MustCompile(`^\s*(?:[-*•]|\d+[.)])\s+(?P<body>.+)$`)
+	headingPattern       = regexp.MustCompile(`^\s{0,3}#{1,6}\s+(.+)$`)
 	actionSectionPattern = regexp.MustCompile(`(?i)(week|phase|milestone|checklist|workout|run|ride|tempo|strength|recovery|baseline|test|assessment|goal|schedule|prep)`)
 	infoSectionPattern   = regexp.MustCompile(`(?i)(current baseline|metrics|recovery priorities|important reminder|core principles|success metrics)`)
 )
 
 type structuredPlanDocument struct {
-	Title         string                     `yaml:"title" json:"title"`
-	Vision        string                     `yaml:"vision" json:"vision"`
-	Target        string                     `yaml:"target" json:"target"`
-	Summary       string                     `yaml:"summary" json:"summary"`
-	Category      string                     `yaml:"category" json:"category"`
-	Tags          []string                   `yaml:"tags" json:"tags"`
-	DataSources   []string                   `yaml:"data_sources" json:"data_sources"`
-	ReviewCadence string                     `yaml:"review_cadence" json:"review_cadence"`
-	Metrics       map[string]any             `yaml:"metrics" json:"metrics"`
-	Milestones    []structuredPlanMilestone  `yaml:"milestones" json:"milestones"`
-	Steps         []any                      `yaml:"steps" json:"steps"`
+	Title              string                        `yaml:"title" json:"title"`
+	Vision             string                        `yaml:"vision" json:"vision"`
+	Target             string                        `yaml:"target" json:"target"`
+	Summary            string                        `yaml:"summary" json:"summary"`
+	Category           string                        `yaml:"category" json:"category"`
+	Objectives         []string                      `yaml:"objectives" json:"objectives"`
+	Principles         []string                      `yaml:"principles" json:"principles"`
+	Tags               []string                      `yaml:"tags" json:"tags"`
+	DataSources        []string                      `yaml:"data_sources" json:"data_sources"`
+	ReviewCadence      string                        `yaml:"review_cadence" json:"review_cadence"`
+	Metrics            map[string]any                `yaml:"metrics" json:"metrics"`
+	TrackedMetrics     []structuredTrackedMetric     `yaml:"tracked_metrics" json:"tracked_metrics"`
+	BaselineFacts      []structuredFact              `yaml:"baseline_facts" json:"baseline_facts"`
+	SuccessCriteria    []string                      `yaml:"success_criteria" json:"success_criteria"`
+	Cadence            []structuredCadenceEntry      `yaml:"cadence" json:"cadence"`
+	SupportingSections []structuredSupportingSection `yaml:"supporting_sections" json:"supporting_sections"`
+	Milestones         []structuredPlanMilestone     `yaml:"milestones" json:"milestones"`
+	Steps              []any                         `yaml:"steps" json:"steps"`
+}
+
+type structuredTrackedMetric struct {
+	Name     string `yaml:"name" json:"name"`
+	Notes    string `yaml:"notes" json:"notes"`
+	Source   string `yaml:"source" json:"source"`
+	Cadence  string `yaml:"cadence" json:"cadence"`
+	Baseline string `yaml:"baseline" json:"baseline"`
+	Target   string `yaml:"target" json:"target"`
+}
+
+type structuredFact struct {
+	Label string `yaml:"label" json:"label"`
+	Value string `yaml:"value" json:"value"`
+}
+
+type structuredCadenceEntry struct {
+	Label    string `yaml:"label" json:"label"`
+	Day      string `yaml:"day" json:"day"`
+	Activity string `yaml:"activity" json:"activity"`
+	Notes    string `yaml:"notes" json:"notes"`
+}
+
+type structuredSupportingSection struct {
+	Title   string                     `yaml:"title" json:"title"`
+	Kind    string                     `yaml:"kind" json:"kind"`
+	Summary string                     `yaml:"summary" json:"summary"`
+	Items   []structuredSupportingItem `yaml:"items" json:"items"`
+}
+
+type structuredSupportingItem struct {
+	Label   string `yaml:"label" json:"label"`
+	Kind    string `yaml:"kind" json:"kind"`
+	Content string `yaml:"content" json:"content"`
+	URI     string `yaml:"uri" json:"uri"`
 }
 
 type structuredPlanMilestone struct {
@@ -112,23 +154,30 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 		"status":  "ok",
 		"created": created,
 		"plan": map[string]any{
-			"id":             plan.ID,
-			"title":          plan.Title,
-			"status":         plan.Status,
-			"category":       plan.Category,
-			"tags":           plan.Tags,
-			"data_sources":   plan.DataSources,
-			"connectors":     plan.Connectors,
-			"review_cadence": plan.ReviewCadence,
-			"summary":        plan.Summary,
-			"metrics":        plan.Metrics,
-			"target":         plan.Target,
-			"vision":         plan.Vision,
-			"milestones":     plan.Milestones,
-			"progress":       plan.Progress,
-			"steps":          plan.Steps,
-			"step_count":     len(plan.Steps),
-			"source":         source,
+			"id":                  plan.ID,
+			"title":               plan.Title,
+			"status":              plan.Status,
+			"category":            plan.Category,
+			"objectives":          plan.Objectives,
+			"principles":          plan.Principles,
+			"tags":                plan.Tags,
+			"data_sources":        plan.DataSources,
+			"connectors":          plan.Connectors,
+			"review_cadence":      plan.ReviewCadence,
+			"summary":             plan.Summary,
+			"metrics":             plan.Metrics,
+			"tracked_metrics":     plan.TrackedMetrics,
+			"baseline_facts":      plan.BaselineFacts,
+			"success_criteria":    plan.SuccessCriteria,
+			"cadence":             plan.Cadence,
+			"supporting_sections": plan.SupportingSections,
+			"target":              plan.Target,
+			"vision":              plan.Vision,
+			"milestones":          plan.Milestones,
+			"progress":            plan.Progress,
+			"steps":               plan.Steps,
+			"step_count":          len(plan.Steps),
+			"source":              source,
 		},
 	}, nil
 }
@@ -231,6 +280,31 @@ func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.Use
 		if len(doc.Steps) > 0 {
 			steps = normalizeStructuredSteps(doc.Steps)
 		}
+		plan := &store.UserPlan{
+			ID:                 id,
+			UserID:             userID,
+			Title:              title,
+			Status:             status,
+			Vision:             strings.TrimSpace(doc.Vision),
+			Target:             firstNonEmptyString(strings.TrimSpace(doc.Target), title),
+			Category:           category,
+			Objectives:         normalizeStringSlice(doc.Objectives),
+			Principles:         normalizeStringSlice(doc.Principles),
+			Tags:               tags,
+			DataSources:        dataSources,
+			Connectors:         connectors,
+			ReviewCadence:      reviewCadence,
+			Summary:            summary,
+			Metrics:            metrics,
+			TrackedMetrics:     structuredTrackedMetricsToStore(doc.TrackedMetrics),
+			BaselineFacts:      structuredFactsToStore(doc.BaselineFacts),
+			SuccessCriteria:    normalizeStringSlice(doc.SuccessCriteria),
+			Cadence:            structuredCadenceToStore(doc.Cadence),
+			SupportingSections: structuredSupportingSectionsToStore(doc.SupportingSections),
+			Milestones:         milestones,
+			Steps:              steps,
+		}
+		return plan, created, source, nil
 	} else {
 		milestones = derivePlanMilestones(rawText)
 		if len(milestones) > 0 {
@@ -409,6 +483,83 @@ func structuredMilestonesToStore(input []structuredPlanMilestone) []store.UserPl
 	return out
 }
 
+func structuredTrackedMetricsToStore(input []structuredTrackedMetric) []store.PlanTrackedMetric {
+	out := make([]store.PlanTrackedMetric, 0, len(input))
+	for _, metric := range input {
+		name := strings.TrimSpace(metric.Name)
+		if name == "" {
+			continue
+		}
+		out = append(out, store.PlanTrackedMetric{
+			Name:     name,
+			Notes:    strings.TrimSpace(metric.Notes),
+			Source:   strings.TrimSpace(metric.Source),
+			Cadence:  strings.TrimSpace(metric.Cadence),
+			Baseline: strings.TrimSpace(metric.Baseline),
+			Target:   strings.TrimSpace(metric.Target),
+		})
+	}
+	return out
+}
+
+func structuredFactsToStore(input []structuredFact) []store.PlanFact {
+	out := make([]store.PlanFact, 0, len(input))
+	for _, fact := range input {
+		label := strings.TrimSpace(fact.Label)
+		value := strings.TrimSpace(fact.Value)
+		if label == "" || value == "" {
+			continue
+		}
+		out = append(out, store.PlanFact{Label: label, Value: value})
+	}
+	return out
+}
+
+func structuredCadenceToStore(input []structuredCadenceEntry) []store.PlanCadenceEntry {
+	out := make([]store.PlanCadenceEntry, 0, len(input))
+	for _, entry := range input {
+		if strings.TrimSpace(entry.Day) == "" && strings.TrimSpace(entry.Activity) == "" && strings.TrimSpace(entry.Label) == "" {
+			continue
+		}
+		out = append(out, store.PlanCadenceEntry{
+			Label:    strings.TrimSpace(entry.Label),
+			Day:      strings.TrimSpace(entry.Day),
+			Activity: strings.TrimSpace(entry.Activity),
+			Notes:    strings.TrimSpace(entry.Notes),
+		})
+	}
+	return out
+}
+
+func structuredSupportingSectionsToStore(input []structuredSupportingSection) []store.PlanSupportingSection {
+	out := make([]store.PlanSupportingSection, 0, len(input))
+	for _, section := range input {
+		title := strings.TrimSpace(section.Title)
+		if title == "" {
+			continue
+		}
+		items := make([]store.PlanSupportingItem, 0, len(section.Items))
+		for _, item := range section.Items {
+			if strings.TrimSpace(item.Label) == "" && strings.TrimSpace(item.Content) == "" && strings.TrimSpace(item.URI) == "" {
+				continue
+			}
+			items = append(items, store.PlanSupportingItem{
+				Label:   strings.TrimSpace(item.Label),
+				Kind:    strings.TrimSpace(item.Kind),
+				Content: strings.TrimSpace(item.Content),
+				URI:     strings.TrimSpace(item.URI),
+			})
+		}
+		out = append(out, store.PlanSupportingSection{
+			Title:   title,
+			Kind:    strings.TrimSpace(section.Kind),
+			Summary: strings.TrimSpace(section.Summary),
+			Items:   items,
+		})
+	}
+	return out
+}
+
 func normalizeStructuredSteps(input []any) []map[string]any {
 	out := make([]map[string]any, 0, len(input))
 	for _, item := range input {
@@ -437,6 +588,18 @@ func normalizeStructuredSteps(input []any) []map[string]any {
 				out = append(out, converted)
 			}
 		}
+	}
+	return out
+}
+
+func normalizeStringSlice(input []string) []string {
+	out := make([]string, 0, len(input))
+	for _, item := range input {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
 	}
 	return out
 }

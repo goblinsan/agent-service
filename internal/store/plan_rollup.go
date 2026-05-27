@@ -10,6 +10,27 @@ func NormalizeUserPlan(plan *UserPlan) {
 	if plan == nil {
 		return
 	}
+	if plan.Objectives == nil {
+		plan.Objectives = []string{}
+	}
+	if plan.Principles == nil {
+		plan.Principles = []string{}
+	}
+	if plan.BaselineFacts == nil {
+		plan.BaselineFacts = []PlanFact{}
+	}
+	if plan.TrackedMetrics == nil {
+		plan.TrackedMetrics = []PlanTrackedMetric{}
+	}
+	if plan.SuccessCriteria == nil {
+		plan.SuccessCriteria = []string{}
+	}
+	if plan.Cadence == nil {
+		plan.Cadence = []PlanCadenceEntry{}
+	}
+	if plan.SupportingSections == nil {
+		plan.SupportingSections = []PlanSupportingSection{}
+	}
 	if len(plan.Milestones) == 0 && len(plan.Steps) > 0 {
 		plan.Milestones = []UserPlanMilestone{{
 			ID:    "m1",

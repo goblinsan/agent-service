@@ -133,6 +133,51 @@ func (s *Service) ensureUserAndContext(ctx context.Context, userID string) []mod
 			if len(p.Metrics) > 0 {
 				fmt.Fprintf(&b, "  - metrics: %v\n", p.Metrics)
 			}
+			if len(p.Objectives) > 0 {
+				fmt.Fprintf(&b, "  - objectives: %s\n", strings.Join(p.Objectives, "; "))
+			}
+			if len(p.Principles) > 0 {
+				fmt.Fprintf(&b, "  - principles: %s\n", strings.Join(p.Principles, "; "))
+			}
+			if len(p.BaselineFacts) > 0 {
+				facts := make([]string, 0, len(p.BaselineFacts))
+				for _, fact := range p.BaselineFacts {
+					if strings.TrimSpace(fact.Label) == "" || strings.TrimSpace(fact.Value) == "" {
+						continue
+					}
+					facts = append(facts, fmt.Sprintf("%s=%s", fact.Label, fact.Value))
+				}
+				if len(facts) > 0 {
+					fmt.Fprintf(&b, "  - baselines: %s\n", strings.Join(facts, "; "))
+				}
+			}
+			if len(p.TrackedMetrics) > 0 {
+				names := make([]string, 0, len(p.TrackedMetrics))
+				for _, metric := range p.TrackedMetrics {
+					if strings.TrimSpace(metric.Name) != "" {
+						names = append(names, metric.Name)
+					}
+				}
+				if len(names) > 0 {
+					fmt.Fprintf(&b, "  - tracked metrics: %s\n", strings.Join(names, "; "))
+				}
+			}
+			if len(p.SuccessCriteria) > 0 {
+				fmt.Fprintf(&b, "  - success criteria: %s\n", strings.Join(p.SuccessCriteria, "; "))
+			}
+			if len(p.Cadence) > 0 {
+				entries := make([]string, 0, len(p.Cadence))
+				for _, entry := range p.Cadence {
+					if strings.TrimSpace(entry.Activity) == "" {
+						continue
+					}
+					prefix := firstNonEmptyPlanString(entry.Day, entry.Label, "session")
+					entries = append(entries, fmt.Sprintf("%s=%s", prefix, entry.Activity))
+				}
+				if len(entries) > 0 {
+					fmt.Fprintf(&b, "  - cadence: %s\n", strings.Join(entries, "; "))
+				}
+			}
 		}
 	}
 	if len(events) > 0 {
@@ -196,4 +241,13 @@ func formatPlanConnectors(connectors []store.PlanConnector) string {
 		}
 	}
 	return strings.Join(parts, ", ")
+}
+
+func firstNonEmptyPlanString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

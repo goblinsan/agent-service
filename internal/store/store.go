@@ -123,24 +123,66 @@ type UserEvent struct {
 // UserPlan is a durable goal/plan attached to a user, with optional structured
 // steps. Status is a free-form label ("draft", "active", "done", "abandoned").
 type UserPlan struct {
-	ID            string              `json:"id"`
-	UserID        string              `json:"user_id"`
-	Title         string              `json:"title"`
-	Status        string              `json:"status"`
-	Vision        string              `json:"vision"`
-	Target        string              `json:"target"`
-	Category      string              `json:"category"`
-	Tags          []string            `json:"tags"`
-	DataSources   []string            `json:"data_sources"`
-	Connectors    []PlanConnector     `json:"connectors"`
-	ReviewCadence string              `json:"review_cadence"`
-	Summary       string              `json:"summary"`
-	Metrics       map[string]any      `json:"metrics"`
-	Milestones    []UserPlanMilestone `json:"milestones"`
-	Progress      UserPlanProgress    `json:"progress"`
-	Steps         []map[string]any    `json:"steps"`
-	CreatedAt     time.Time           `json:"created_at"`
-	UpdatedAt     time.Time           `json:"updated_at"`
+	ID                 string                  `json:"id"`
+	UserID             string                  `json:"user_id"`
+	Title              string                  `json:"title"`
+	Status             string                  `json:"status"`
+	Vision             string                  `json:"vision"`
+	Target             string                  `json:"target"`
+	Category           string                  `json:"category"`
+	Objectives         []string                `json:"objectives"`
+	Principles         []string                `json:"principles"`
+	Tags               []string                `json:"tags"`
+	DataSources        []string                `json:"data_sources"`
+	Connectors         []PlanConnector         `json:"connectors"`
+	ReviewCadence      string                  `json:"review_cadence"`
+	Summary            string                  `json:"summary"`
+	Metrics            map[string]any          `json:"metrics"`
+	TrackedMetrics     []PlanTrackedMetric     `json:"tracked_metrics"`
+	BaselineFacts      []PlanFact              `json:"baseline_facts"`
+	SuccessCriteria    []string                `json:"success_criteria"`
+	Cadence            []PlanCadenceEntry      `json:"cadence"`
+	SupportingSections []PlanSupportingSection `json:"supporting_sections"`
+	Milestones         []UserPlanMilestone     `json:"milestones"`
+	Progress           UserPlanProgress        `json:"progress"`
+	Steps              []map[string]any        `json:"steps"`
+	CreatedAt          time.Time               `json:"created_at"`
+	UpdatedAt          time.Time               `json:"updated_at"`
+}
+
+type PlanFact struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+type PlanTrackedMetric struct {
+	Name     string `json:"name"`
+	Notes    string `json:"notes"`
+	Source   string `json:"source"`
+	Cadence  string `json:"cadence"`
+	Baseline string `json:"baseline"`
+	Target   string `json:"target"`
+}
+
+type PlanCadenceEntry struct {
+	Label    string `json:"label"`
+	Day      string `json:"day"`
+	Activity string `json:"activity"`
+	Notes    string `json:"notes"`
+}
+
+type PlanSupportingSection struct {
+	Title   string               `json:"title"`
+	Kind    string               `json:"kind"`
+	Summary string               `json:"summary"`
+	Items   []PlanSupportingItem `json:"items"`
+}
+
+type PlanSupportingItem struct {
+	Label   string `json:"label"`
+	Kind    string `json:"kind"`
+	Content string `json:"content"`
+	URI     string `json:"uri"`
 }
 
 type UserPlanMilestone struct {

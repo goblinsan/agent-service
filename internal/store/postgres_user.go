@@ -162,6 +162,62 @@ func (p *Postgres) UpsertUserPlan(ctx context.Context, plan *UserPlan) error {
 	if err != nil {
 		return err
 	}
+	objectives := plan.Objectives
+	if objectives == nil {
+		objectives = []string{}
+	}
+	objectivesRaw, err := json.Marshal(objectives)
+	if err != nil {
+		return err
+	}
+	principles := plan.Principles
+	if principles == nil {
+		principles = []string{}
+	}
+	principlesRaw, err := json.Marshal(principles)
+	if err != nil {
+		return err
+	}
+	trackedMetrics := plan.TrackedMetrics
+	if trackedMetrics == nil {
+		trackedMetrics = []PlanTrackedMetric{}
+	}
+	trackedMetricsRaw, err := json.Marshal(trackedMetrics)
+	if err != nil {
+		return err
+	}
+	baselineFacts := plan.BaselineFacts
+	if baselineFacts == nil {
+		baselineFacts = []PlanFact{}
+	}
+	baselineFactsRaw, err := json.Marshal(baselineFacts)
+	if err != nil {
+		return err
+	}
+	successCriteria := plan.SuccessCriteria
+	if successCriteria == nil {
+		successCriteria = []string{}
+	}
+	successCriteriaRaw, err := json.Marshal(successCriteria)
+	if err != nil {
+		return err
+	}
+	cadence := plan.Cadence
+	if cadence == nil {
+		cadence = []PlanCadenceEntry{}
+	}
+	cadenceRaw, err := json.Marshal(cadence)
+	if err != nil {
+		return err
+	}
+	supportingSections := plan.SupportingSections
+	if supportingSections == nil {
+		supportingSections = []PlanSupportingSection{}
+	}
+	supportingSectionsRaw, err := json.Marshal(supportingSections)
+	if err != nil {
+		return err
+	}
 	milestones := plan.Milestones
 	if milestones == nil {
 		milestones = []UserPlanMilestone{}
@@ -180,22 +236,30 @@ func (p *Postgres) UpsertUserPlan(ctx context.Context, plan *UserPlan) error {
 	}
 	result, err := p.db.ExecContext(ctx,
 		`INSERT INTO user_plans (
-		     id, user_id, title, status, vision, target, category, tags, data_sources,
-		     connectors, review_cadence, summary, metrics, milestones, progress, steps, created_at, updated_at
+		     id, user_id, title, status, vision, target, category, objectives, principles, tags, data_sources,
+		     connectors, review_cadence, summary, metrics, tracked_metrics, baseline_facts, success_criteria,
+		     cadence, supporting_sections, milestones, progress, steps, created_at, updated_at
 		 )
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW(), NOW())
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, NOW(), NOW())
 		 ON CONFLICT (id) DO UPDATE SET
 		   title = EXCLUDED.title,
 		   status = EXCLUDED.status,
 		   vision = EXCLUDED.vision,
 		   target = EXCLUDED.target,
 		   category = EXCLUDED.category,
+		   objectives = EXCLUDED.objectives,
+		   principles = EXCLUDED.principles,
 		   tags = EXCLUDED.tags,
 		   data_sources = EXCLUDED.data_sources,
 		   connectors = EXCLUDED.connectors,
 		   review_cadence = EXCLUDED.review_cadence,
 		   summary = EXCLUDED.summary,
 		   metrics = EXCLUDED.metrics,
+		   tracked_metrics = EXCLUDED.tracked_metrics,
+		   baseline_facts = EXCLUDED.baseline_facts,
+		   success_criteria = EXCLUDED.success_criteria,
+		   cadence = EXCLUDED.cadence,
+		   supporting_sections = EXCLUDED.supporting_sections,
 		   milestones = EXCLUDED.milestones,
 		   progress = EXCLUDED.progress,
 		   steps = EXCLUDED.steps,
@@ -208,12 +272,19 @@ func (p *Postgres) UpsertUserPlan(ctx context.Context, plan *UserPlan) error {
 		plan.Vision,
 		plan.Target,
 		plan.Category,
+		string(objectivesRaw),
+		string(principlesRaw),
 		string(tagsRaw),
 		string(dataSourcesRaw),
 		string(connectorsRaw),
 		plan.ReviewCadence,
 		nullableString(plan.Summary),
 		string(metricsRaw),
+		string(trackedMetricsRaw),
+		string(baselineFactsRaw),
+		string(successCriteriaRaw),
+		string(cadenceRaw),
+		string(supportingSectionsRaw),
 		string(milestonesRaw),
 		string(progressRaw),
 		string(stepsRaw),
@@ -234,8 +305,9 @@ func (p *Postgres) UpsertUserPlan(ctx context.Context, plan *UserPlan) error {
 func (p *Postgres) ListActivePlans(ctx context.Context, userID string) ([]UserPlan, error) {
 	rows, err := p.db.QueryContext(ctx,
 		`SELECT id, user_id, title, status, COALESCE(vision, ''), COALESCE(target, ''),
-		        COALESCE(category, ''), tags, data_sources,
-		        connectors, COALESCE(review_cadence, ''), COALESCE(summary, ''), metrics, milestones, progress, steps,
+		        COALESCE(category, ''), objectives, principles, tags, data_sources,
+		        connectors, COALESCE(review_cadence, ''), COALESCE(summary, ''), metrics, tracked_metrics,
+		        baseline_facts, success_criteria, cadence, supporting_sections, milestones, progress, steps,
 		        created_at, updated_at
 		 FROM user_plans
 		 WHERE user_id = $1 AND status NOT IN ('done', 'abandoned')
@@ -260,8 +332,9 @@ func (p *Postgres) ListActivePlans(ctx context.Context, userID string) ([]UserPl
 func (p *Postgres) GetUserPlan(ctx context.Context, userID, planID string) (*UserPlan, error) {
 	rows, err := p.db.QueryContext(ctx,
 		`SELECT id, user_id, title, status, COALESCE(vision, ''), COALESCE(target, ''),
-		        COALESCE(category, ''), tags, data_sources, connectors,
-		        COALESCE(review_cadence, ''), COALESCE(summary, ''), metrics, milestones, progress, steps,
+		        COALESCE(category, ''), objectives, principles, tags, data_sources, connectors,
+		        COALESCE(review_cadence, ''), COALESCE(summary, ''), metrics, tracked_metrics, baseline_facts,
+		        success_criteria, cadence, supporting_sections, milestones, progress, steps,
 		        created_at, updated_at
 		 FROM user_plans
 		 WHERE user_id = $1 AND id = $2
@@ -305,7 +378,14 @@ func scanUserPlan(rows *sql.Rows) (UserPlan, error) {
 	var tagsRaw []byte
 	var dataSourcesRaw []byte
 	var connectorsRaw []byte
+	var objectivesRaw []byte
+	var principlesRaw []byte
 	var metricsRaw []byte
+	var trackedMetricsRaw []byte
+	var baselineFactsRaw []byte
+	var successCriteriaRaw []byte
+	var cadenceRaw []byte
+	var supportingSectionsRaw []byte
 	var milestonesRaw []byte
 	var progressRaw []byte
 	var stepsRaw []byte
@@ -317,12 +397,19 @@ func scanUserPlan(rows *sql.Rows) (UserPlan, error) {
 		&plan.Vision,
 		&plan.Target,
 		&plan.Category,
+		&objectivesRaw,
+		&principlesRaw,
 		&tagsRaw,
 		&dataSourcesRaw,
 		&connectorsRaw,
 		&plan.ReviewCadence,
 		&plan.Summary,
 		&metricsRaw,
+		&trackedMetricsRaw,
+		&baselineFactsRaw,
+		&successCriteriaRaw,
+		&cadenceRaw,
+		&supportingSectionsRaw,
 		&milestonesRaw,
 		&progressRaw,
 		&stepsRaw,
@@ -333,6 +420,16 @@ func scanUserPlan(rows *sql.Rows) (UserPlan, error) {
 	}
 	if len(tagsRaw) > 0 {
 		if err := json.Unmarshal(tagsRaw, &plan.Tags); err != nil {
+			return UserPlan{}, err
+		}
+	}
+	if len(objectivesRaw) > 0 {
+		if err := json.Unmarshal(objectivesRaw, &plan.Objectives); err != nil {
+			return UserPlan{}, err
+		}
+	}
+	if len(principlesRaw) > 0 {
+		if err := json.Unmarshal(principlesRaw, &plan.Principles); err != nil {
 			return UserPlan{}, err
 		}
 	}
@@ -348,6 +445,31 @@ func scanUserPlan(rows *sql.Rows) (UserPlan, error) {
 	}
 	if len(metricsRaw) > 0 {
 		if err := json.Unmarshal(metricsRaw, &plan.Metrics); err != nil {
+			return UserPlan{}, err
+		}
+	}
+	if len(trackedMetricsRaw) > 0 {
+		if err := json.Unmarshal(trackedMetricsRaw, &plan.TrackedMetrics); err != nil {
+			return UserPlan{}, err
+		}
+	}
+	if len(baselineFactsRaw) > 0 {
+		if err := json.Unmarshal(baselineFactsRaw, &plan.BaselineFacts); err != nil {
+			return UserPlan{}, err
+		}
+	}
+	if len(successCriteriaRaw) > 0 {
+		if err := json.Unmarshal(successCriteriaRaw, &plan.SuccessCriteria); err != nil {
+			return UserPlan{}, err
+		}
+	}
+	if len(cadenceRaw) > 0 {
+		if err := json.Unmarshal(cadenceRaw, &plan.Cadence); err != nil {
+			return UserPlan{}, err
+		}
+	}
+	if len(supportingSectionsRaw) > 0 {
+		if err := json.Unmarshal(supportingSectionsRaw, &plan.SupportingSections); err != nil {
 			return UserPlan{}, err
 		}
 	}
