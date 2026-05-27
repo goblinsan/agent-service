@@ -23,10 +23,41 @@ func (m *mockStore) ListRecentUserEvents(_ context.Context, _ string, _ int) ([]
 	return nil, nil
 }
 
-func (m *mockStore) UpsertUserPlan(_ context.Context, _ *store.UserPlan) error { return nil }
+func (m *mockStore) UpsertUserPlan(_ context.Context, p *store.UserPlan) error {
+	if m.plans[p.UserID] == nil {
+		m.plans[p.UserID] = map[string]store.UserPlan{}
+	}
+	store.NormalizeUserPlan(p)
+	m.plans[p.UserID][p.ID] = *p
+	return nil
+}
 
-func (m *mockStore) ListActivePlans(_ context.Context, _ string) ([]store.UserPlan, error) {
-	return nil, nil
+func (m *mockStore) ListActivePlans(_ context.Context, userID string) ([]store.UserPlan, error) {
+	bucket := m.plans[userID]
+	out := make([]store.UserPlan, 0, len(bucket))
+	for _, p := range bucket {
+		if p.Status == "done" || p.Status == "abandoned" {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+func (m *mockStore) GetUserPlan(_ context.Context, userID, planID string) (*store.UserPlan, error) {
+	plan, ok := m.plans[userID][planID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return &plan, nil
+}
+
+func (m *mockStore) DeleteUserPlan(_ context.Context, userID, planID string) error {
+	if _, ok := m.plans[userID][planID]; !ok {
+		return store.ErrNotFound
+	}
+	delete(m.plans[userID], planID)
+	return nil
 }
 
 func (m *mockStore) CreateNotification(_ context.Context, _ *store.Notification) error { return nil }

@@ -104,6 +104,26 @@ func (m *mockStore) ListActivePlans(_ context.Context, userID string) ([]store.U
 	return out, nil
 }
 
+func (m *mockStore) GetUserPlan(_ context.Context, userID, planID string) (*store.UserPlan, error) {
+	mockUsers.mu.Lock()
+	defer mockUsers.mu.Unlock()
+	plan, ok := mockUsers.plans[userID][planID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return &plan, nil
+}
+
+func (m *mockStore) DeleteUserPlan(_ context.Context, userID, planID string) error {
+	mockUsers.mu.Lock()
+	defer mockUsers.mu.Unlock()
+	if _, ok := mockUsers.plans[userID][planID]; !ok {
+		return store.ErrNotFound
+	}
+	delete(mockUsers.plans[userID], planID)
+	return nil
+}
+
 func (m *mockStore) CreateNotification(_ context.Context, _ *store.Notification) error { return nil }
 func (m *mockStore) ListNotifications(_ context.Context, _ string, _ bool, _ int) ([]store.Notification, error) {
 	return nil, nil

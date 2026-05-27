@@ -103,6 +103,12 @@ func NewRouterWithOptions(svc *service.Service, opts RouterOptions) http.Handler
 	r.Get("/internal/schedules", listSchedulesHandler(svc))
 	r.Delete("/internal/schedules/{id}", deleteScheduleHandler(svc))
 
+	// Plan CRUD endpoints.
+	r.Get("/internal/plans", listPlansHandler(svc))
+	r.Get("/internal/plans/{id}", getPlanHandler(svc))
+	r.Post("/internal/plans", upsertPlanHandler(svc))
+	r.Delete("/internal/plans/{id}", deletePlanHandler(svc))
+
 	// Push token registration endpoints.
 	r.Post("/internal/device-tokens", registerDeviceTokenHandler(svc))
 	r.Delete("/internal/device-tokens/{token}", unregisterDeviceTokenHandler(svc))
@@ -811,6 +817,151 @@ func deleteScheduleHandler(svc *service.Service) http.HandlerFunc {
 				return
 			}
 			slog.Error("delete schedule failed", "error", err, "user_id", userID, "schedule_id", id)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func listPlansHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		plans, err := svc.ListActivePlans(r.Context(), userID)
+		if err != nil {
+			slog.Error("list plans failed", "error", err, "user_id", userID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		if plans == nil {
+			plans = []store.UserPlan{}
+		}
+		if err := json.NewEncoder(w).Encode(map[string]any{"plans": plans}); err != nil {
+			slog.Error("failed to encode plans response", "error", err)
+		}
+	}
+}
+
+func getPlanHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		planID := strings.TrimSpace(chi.URLParam(r, "id"))
+		if planID == "" {
+			http.Error(w, `{"error":"plan id is required"}`, http.StatusBadRequest)
+			return
+		}
+		plan, err := svc.GetUserPlan(r.Context(), userID, planID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				http.Error(w, `{"error":"plan not found"}`, http.StatusNotFound)
+				return
+			}
+			slog.Error("get plan failed", "error", err, "user_id", userID, "plan_id", planID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		if err := json.NewEncoder(w).Encode(map[string]any{"plan": plan}); err != nil {
+			slog.Error("failed to encode plan response", "error", err)
+		}
+	}
+}
+
+func upsertPlanHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		var req struct {
+			ID            string                    `json:"id"`
+			Title         string                    `json:"title"`
+			Status        string                    `json:"status"`
+			Vision        string                    `json:"vision"`
+			Target        string                    `json:"target"`
+			Category      string                    `json:"category"`
+			Tags          []string                  `json:"tags"`
+			DataSources   []string                  `json:"data_sources"`
+			ReviewCadence string                    `json:"review_cadence"`
+			Summary       string                    `json:"summary"`
+			Metrics       map[string]any            `json:"metrics"`
+			Milestones    []store.UserPlanMilestone `json:"milestones"`
+			Steps         []map[string]any          `json:"steps"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.Title) == "" {
+			http.Error(w, `{"error":"title is required"}`, http.StatusBadRequest)
+			return
+		}
+		created := strings.TrimSpace(req.ID) == ""
+		if created {
+			req.ID = newID()
+		}
+		plan := &store.UserPlan{
+			ID:            strings.TrimSpace(req.ID),
+			UserID:        userID,
+			Title:         strings.TrimSpace(req.Title),
+			Status:        strings.TrimSpace(req.Status),
+			Vision:        strings.TrimSpace(req.Vision),
+			Target:        strings.TrimSpace(req.Target),
+			Category:      strings.TrimSpace(req.Category),
+			Tags:          req.Tags,
+			DataSources:   req.DataSources,
+			ReviewCadence: strings.TrimSpace(req.ReviewCadence),
+			Summary:       strings.TrimSpace(req.Summary),
+			Metrics:       req.Metrics,
+			Milestones:    req.Milestones,
+			Steps:         req.Steps,
+		}
+		if err := svc.UpsertUserPlan(r.Context(), plan); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				http.Error(w, `{"error":"plan not found"}`, http.StatusNotFound)
+				return
+			}
+			slog.Error("upsert plan failed", "error", err, "user_id", userID, "plan_id", plan.ID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		statusCode := http.StatusOK
+		if created {
+			statusCode = http.StatusCreated
+		}
+		w.WriteHeader(statusCode)
+		if err := json.NewEncoder(w).Encode(map[string]any{"created": created, "plan": plan}); err != nil {
+			slog.Error("failed to encode plan upsert response", "error", err)
+		}
+	}
+}
+
+func deletePlanHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		planID := strings.TrimSpace(chi.URLParam(r, "id"))
+		if planID == "" {
+			http.Error(w, `{"error":"plan id is required"}`, http.StatusBadRequest)
+			return
+		}
+		if err := svc.DeleteUserPlan(r.Context(), userID, planID); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				http.Error(w, `{"error":"plan not found"}`, http.StatusNotFound)
+				return
+			}
+			slog.Error("delete plan failed", "error", err, "user_id", userID, "plan_id", planID)
 			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
 			return
 		}
