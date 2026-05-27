@@ -378,9 +378,10 @@ func asString(v any) string {
 }
 
 func normalizePlanState(status, fallback string) string {
-	switch strings.ToLower(strings.TrimSpace(status)) {
+	normalized := strings.ToLower(strings.TrimSpace(status))
+	switch normalized {
 	case "todo", "doing", "done", "blocked", "paused", "active":
-		return strings.ToLower(strings.TrimSpace(status))
+		return normalized
 	default:
 		return fallback
 	}

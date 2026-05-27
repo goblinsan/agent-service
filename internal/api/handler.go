@@ -929,6 +929,10 @@ func upsertPlanHandler(svc *service.Service) http.HandlerFunc {
 				http.Error(w, `{"error":"plan not found"}`, http.StatusNotFound)
 				return
 			}
+			if errors.Is(err, store.ErrForbidden) {
+				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+				return
+			}
 			slog.Error("upsert plan failed", "error", err, "user_id", userID, "plan_id", plan.ID)
 			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
 			return

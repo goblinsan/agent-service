@@ -170,7 +170,7 @@ func (p *Postgres) UpsertUserPlan(ctx context.Context, plan *UserPlan) error {
 	if status == "" {
 		status = "draft"
 	}
-	res, err := p.db.ExecContext(ctx,
+	result, err := p.db.ExecContext(ctx,
 		`INSERT INTO user_plans (
 		     id, user_id, title, status, vision, target, category, tags, data_sources,
 		     review_cadence, summary, metrics, milestones, progress, steps, created_at, updated_at
@@ -211,12 +211,12 @@ func (p *Postgres) UpsertUserPlan(ctx context.Context, plan *UserPlan) error {
 	if err != nil {
 		return err
 	}
-	affected, err := res.RowsAffected()
+	affected, err := result.RowsAffected()
 	if err != nil {
 		return err
 	}
 	if affected == 0 {
-		return ErrNotFound
+		return ErrForbidden
 	}
 	return nil
 }
