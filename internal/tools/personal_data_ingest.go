@@ -80,8 +80,12 @@ func (t *PersonalDataIngestTool) Execute(ctx context.Context, params map[string]
 	created := false
 	if plan == nil {
 		created = true
+		planID, err := newPersonalDataPlanID(t.App)
+		if err != nil {
+			return nil, err
+		}
 		plan = &store.UserPlan{
-			ID:            newPersonalDataPlanID(t.App),
+			ID:            planID,
 			UserID:        uid,
 			Title:         t.PlanTitle,
 			Status:        "active",
@@ -184,7 +188,11 @@ func findPlanForDomainOrConnector(plans []store.UserPlan, domain, app string) *s
 				return p
 			}
 		}
-		if strings.EqualFold(strings.TrimSpace(p.Category), strings.TrimSpace(domain)) {
+	}
+	for i := range plans {
+		p := &plans[i]
+		// Category-only fallback is safe when no explicit connectors are set yet.
+		if len(p.Connectors) == 0 && strings.EqualFold(strings.TrimSpace(p.Category), strings.TrimSpace(domain)) {
 			return p
 		}
 	}
@@ -202,12 +210,12 @@ func mergeMetrics(existing, incoming map[string]any) map[string]any {
 	return out
 }
 
-func newPersonalDataPlanID(app string) string {
+func newPersonalDataPlanID(app string) (string, error) {
 	var b [10]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return "plan-" + strings.ToLower(strings.TrimSpace(app)) + "-fallback"
+		return "", fmt.Errorf("generate personal data plan id: %w", err)
 	}
-	return "plan-" + strings.ToLower(strings.TrimSpace(app)) + "-" + hex.EncodeToString(b[:])
+	return "plan-" + strings.ToLower(strings.TrimSpace(app)) + "-" + hex.EncodeToString(b[:]), nil
 }
 
 func readNumeric(v any) (float64, bool) {
