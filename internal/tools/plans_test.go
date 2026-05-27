@@ -378,3 +378,43 @@ func TestPlanIngestTextBuildsMilestonesForBackwardCompatibility(t *testing.T) {
 		t.Fatalf("unexpected progress %+v", plan.Progress)
 	}
 }
+
+func TestBuildUserPlanFromDocumentRejectsMalformedStructuredImport(t *testing.T) {
+	_, _, _, err := BuildUserPlanFromDocument("u1", map[string]any{
+		"title":  "endurance.yaml",
+		"source": "endurance.yaml",
+		"text":   "title: Endurance Plan\nmilestones:\n  - title: Week 1\n    tasks:\n      - title: Monday: 3 easy miles\n",
+	})
+	if err == nil {
+		t.Fatal("expected malformed YAML import to fail")
+	}
+	if !strings.Contains(err.Error(), "Fix the YAML/JSON formatting") {
+		t.Fatalf("expected helpful formatting message, got %q", err.Error())
+	}
+}
+
+func TestBuildUserPlanFromDocumentKeepsStructuredFieldsForValidYAML(t *testing.T) {
+	plan, _, _, err := BuildUserPlanFromDocument("u1", map[string]any{
+		"title":  "endurance.yaml",
+		"source": "endurance.yaml",
+		"text":   "title: Endurance Plan\ncategory: health\nobjectives:\n  - Build aerobic base\ntracked_metrics:\n  - name: Distance\n    cadence: daily\nsupporting_sections:\n  - title: Guidance\n    kind: note\n    items:\n      - label: Easy means easy\n        kind: note\n        content: Stay controlled.\nmilestones:\n  - title: Week 1\n    tasks:\n      - title: \"Monday: 3 easy miles\"\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Category != "health" {
+		t.Fatalf("expected category health, got %q", plan.Category)
+	}
+	if len(plan.Objectives) != 1 || plan.Objectives[0] != "Build aerobic base" {
+		t.Fatalf("unexpected objectives: %#v", plan.Objectives)
+	}
+	if len(plan.TrackedMetrics) != 1 || plan.TrackedMetrics[0].Name != "Distance" {
+		t.Fatalf("unexpected tracked metrics: %#v", plan.TrackedMetrics)
+	}
+	if len(plan.SupportingSections) != 1 || plan.SupportingSections[0].Title != "Guidance" {
+		t.Fatalf("unexpected supporting sections: %#v", plan.SupportingSections)
+	}
+	if len(plan.Milestones) != 1 || len(plan.Milestones[0].Tasks) != 1 {
+		t.Fatalf("unexpected milestones: %#v", plan.Milestones)
+	}
+}

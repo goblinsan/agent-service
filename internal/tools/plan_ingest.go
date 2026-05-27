@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -243,6 +244,7 @@ func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.Use
 
 	source, _ := params["source"].(string)
 	source = strings.TrimSpace(source)
+	expectsStructured := expectsStructuredPlanDocument(source) || expectsStructuredPlanDocument(title)
 	if source != "" && !containsString(dataSources, source) {
 		dataSources = append(dataSources, source)
 	}
@@ -254,7 +256,7 @@ func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.Use
 	summary := derivePlanSummary(rawText, title, source)
 	var steps []map[string]any
 	var milestones []store.UserPlanMilestone
-	if doc, ok := parseStructuredPlanDocument(rawText); ok {
+	if doc, ok, parseErr := parseStructuredPlanDocument(rawText); ok {
 		if strings.TrimSpace(doc.Title) != "" {
 			title = strings.TrimSpace(doc.Title)
 		}
@@ -305,6 +307,11 @@ func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.Use
 			Steps:              steps,
 		}
 		return plan, created, source, nil
+	} else if expectsStructured {
+		if parseErr != nil {
+			return nil, false, "", fmt.Errorf("failed to parse structured plan document %q: %v. Fix the YAML/JSON formatting and try again. For YAML, quote values containing ':' such as task titles", sourceOrTitle(source, title), parseErr)
+		}
+		return nil, false, "", fmt.Errorf("failed to parse structured plan document %q: missing required top-level fields such as title. Fix the YAML/JSON structure and try again", sourceOrTitle(source, title))
 	} else {
 		milestones = derivePlanMilestones(rawText)
 		if len(milestones) > 0 {
@@ -428,22 +435,34 @@ func derivePlanSteps(raw string) []map[string]any {
 	return steps
 }
 
-func parseStructuredPlanDocument(raw string) (structuredPlanDocument, bool) {
+func parseStructuredPlanDocument(raw string) (structuredPlanDocument, bool, error) {
 	var doc structuredPlanDocument
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return doc, false
+		return doc, false, nil
 	}
 	if !strings.Contains(trimmed, "title:") && !strings.Contains(trimmed, "\"title\"") {
-		return doc, false
+		return doc, false, nil
 	}
 	if err := yaml.Unmarshal([]byte(trimmed), &doc); err != nil {
-		return structuredPlanDocument{}, false
+		return structuredPlanDocument{}, false, err
 	}
 	if strings.TrimSpace(doc.Title) == "" {
-		return structuredPlanDocument{}, false
+		return structuredPlanDocument{}, false, nil
 	}
-	return doc, true
+	return doc, true, nil
+}
+
+func expectsStructuredPlanDocument(name string) bool {
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(name)))
+	return ext == ".yaml" || ext == ".yml" || ext == ".json"
+}
+
+func sourceOrTitle(source, title string) string {
+	if strings.TrimSpace(source) != "" {
+		return strings.TrimSpace(source)
+	}
+	return strings.TrimSpace(title)
 }
 
 func structuredMilestonesToStore(input []structuredPlanMilestone) []store.UserPlanMilestone {
