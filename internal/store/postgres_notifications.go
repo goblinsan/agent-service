@@ -155,15 +155,30 @@ func (p *Postgres) CreateScheduledJob(ctx context.Context, job *ScheduledJob) er
 }
 
 func (p *Postgres) ListScheduledJobs(ctx context.Context, userID string, limit int) ([]ScheduledJob, error) {
+	return p.listScheduledJobs(ctx, userID, limit, true)
+}
+
+func (p *Postgres) ListScheduledJobHistory(ctx context.Context, userID string, limit int) ([]ScheduledJob, error) {
+	return p.listScheduledJobs(ctx, userID, limit, false)
+}
+
+func (p *Postgres) listScheduledJobs(ctx context.Context, userID string, limit int, activeOnly bool) ([]ScheduledJob, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
+	}
+	where := `WHERE user_id = $1`
+	order := `ORDER BY run_at ASC`
+	if activeOnly {
+		where += ` AND status IN ('pending', 'running', 'paused')`
+	} else {
+		order = `ORDER BY updated_at DESC, run_at DESC`
 	}
 	rows, err := p.db.QueryContext(ctx,
 		`SELECT id, user_id, kind, prompt, COALESCE(thread_id, ''), COALESCE(agent_id, ''), payload,
 		        run_at, COALESCE(recurrence, ''), COALESCE(timezone, ''), status, locked_until, last_run_at, created_at, updated_at
 		 FROM scheduled_jobs
-		 WHERE user_id = $1
-		 ORDER BY run_at ASC
+		 `+where+`
+		 `+order+`
 		 LIMIT $2`,
 		userID, limit,
 	)
@@ -182,11 +197,84 @@ func (p *Postgres) ListScheduledJobs(ctx context.Context, userID string, limit i
 	return out, rows.Err()
 }
 
+func (p *Postgres) PatchScheduledJob(ctx context.Context, userID, jobID string, patch ScheduledJobPatch) error {
+	if userID == "" || jobID == "" {
+		return errors.New("scheduled job user_id and id required")
+	}
+	statusValue := ""
+	if patch.Status != nil {
+		statusValue = strings.TrimSpace(*patch.Status)
+		switch statusValue {
+		case "pending", "running", "paused", "completed", "failed", "cancelled":
+		default:
+			return errors.New("invalid scheduled job status")
+		}
+	}
+	payloadRaw := "{}"
+	if patch.PayloadSet {
+		payload := patch.Payload
+		if payload == nil {
+			payload = map[string]any{}
+		}
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		payloadRaw = string(raw)
+	}
+	res, err := p.db.ExecContext(ctx,
+		`UPDATE scheduled_jobs
+		 SET kind = CASE WHEN $3 THEN NULLIF($4, '') ELSE kind END,
+		     prompt = CASE WHEN $5 THEN $6 ELSE prompt END,
+		     thread_id = CASE WHEN $7 THEN NULLIF($8, '') ELSE thread_id END,
+		     agent_id = CASE WHEN $9 THEN NULLIF($10, '') ELSE agent_id END,
+		     payload = CASE WHEN $11 THEN $12 ELSE payload END,
+		     run_at = COALESCE($13, run_at),
+		     recurrence = CASE WHEN $14 THEN NULLIF($15, '') ELSE recurrence END,
+		     timezone = CASE WHEN $16 THEN NULLIF($17, '') ELSE timezone END,
+		     status = CASE WHEN $18 THEN $19 ELSE status END,
+		     locked_until = CASE WHEN $20 THEN NULL ELSE locked_until END,
+		     updated_at = NOW()
+		 WHERE id = $1 AND user_id = $2`,
+		jobID,
+		userID,
+		patch.Kind != nil,
+		stringValue(patch.Kind),
+		patch.Prompt != nil,
+		stringValue(patch.Prompt),
+		patch.ThreadID != nil,
+		stringValue(patch.ThreadID),
+		patch.AgentID != nil,
+		stringValue(patch.AgentID),
+		patch.PayloadSet,
+		payloadRaw,
+		nullableTimePtr(patch.RunAt),
+		patch.Recurrence != nil,
+		stringValue(patch.Recurrence),
+		patch.Timezone != nil,
+		stringValue(patch.Timezone),
+		patch.Status != nil,
+		statusValue,
+		patch.ClearLock,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (p *Postgres) DeleteScheduledJob(ctx context.Context, userID, jobID string) error {
 	res, err := p.db.ExecContext(ctx,
 		`UPDATE scheduled_jobs
 		 SET status = 'cancelled', updated_at = NOW(), locked_until = NULL
-		 WHERE id = $1 AND user_id = $2 AND status IN ('pending', 'running')`,
+		 WHERE id = $1 AND user_id = $2 AND status IN ('pending', 'running', 'paused')`,
 		jobID, userID,
 	)
 	if err != nil {
@@ -200,6 +288,13 @@ func (p *Postgres) DeleteScheduledJob(ctx context.Context, userID, jobID string)
 		return ErrNotFound
 	}
 	return nil
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func (p *Postgres) AcquireDueScheduledJobs(ctx context.Context, limit int, lease time.Duration) ([]ScheduledJob, error) {

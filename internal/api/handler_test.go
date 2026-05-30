@@ -18,17 +18,23 @@ import (
 )
 
 type mockStore struct {
-	sessions map[string]*store.Session
-	runs     map[string]*store.Run
-	steps    []*store.RunStep
-	plans    map[string]map[string]store.UserPlan
+	sessions           map[string]*store.Session
+	runs               map[string]*store.Run
+	steps              []*store.RunStep
+	plans              map[string]map[string]store.UserPlan
+	sourceRecords      map[string]store.SourceRecord
+	sourceBatchResults []store.SourceBatchIngestResult
+	rejectedRecords    []store.RejectedSourceRecord
+	contributions      []store.ProgressContribution
+	rollups            []*store.DailyRollup
 }
 
 func newMockStore() *mockStore {
 	return &mockStore{
-		sessions: make(map[string]*store.Session),
-		runs:     make(map[string]*store.Run),
-		plans:    make(map[string]map[string]store.UserPlan),
+		sessions:      make(map[string]*store.Session),
+		runs:          make(map[string]*store.Run),
+		plans:         make(map[string]map[string]store.UserPlan),
+		sourceRecords: make(map[string]store.SourceRecord),
 	}
 }
 
@@ -75,6 +81,9 @@ func (m *mockStore) ListSteps(_ context.Context, runID string) ([]*store.RunStep
 		}
 	}
 	return result, nil
+}
+func (m *mockStore) PatchScheduledJob(_ context.Context, _, _ string, _ store.ScheduledJobPatch) error {
+	return nil
 }
 
 type mockProvider struct{}

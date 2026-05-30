@@ -36,6 +36,43 @@ func (m *mockProvider) Stream(_ context.Context, _ model.Request, onChunk func(s
 	return onChunk("chunk")
 }
 
+type streamingMockProvider struct{}
+
+func (m *streamingMockProvider) Complete(_ context.Context, _ model.Request) (*model.Response, error) {
+	return nil, assert.AnError
+}
+
+func (m *streamingMockProvider) Stream(_ context.Context, _ model.Request, onChunk func(string) error) error {
+	_, err := m.StreamComplete(context.Background(), model.Request{}, onChunk)
+	return err
+}
+
+func (m *streamingMockProvider) StreamComplete(_ context.Context, _ model.Request, onChunk func(string) error) (*model.Response, error) {
+	return m.StreamCompleteWithReasoning(context.Background(), model.Request{}, onChunk, nil)
+}
+
+func (m *streamingMockProvider) StreamCompleteWithReasoning(_ context.Context, _ model.Request, onChunk func(string) error, onReasoning func(string) error) (*model.Response, error) {
+	if onReasoning != nil {
+		if err := onReasoning("checking "); err != nil {
+			return nil, err
+		}
+		if err := onReasoning("answer"); err != nil {
+			return nil, err
+		}
+	}
+	if err := onChunk("hel"); err != nil {
+		return nil, err
+	}
+	if err := onChunk("lo"); err != nil {
+		return nil, err
+	}
+	return &model.Response{
+		Content:      "hello",
+		FinishReason: "stop",
+		Usage:        model.Usage{CompletionTokens: 2, TotalTokens: 2},
+	}, nil
+}
+
 type mockStore struct {
 	steps []*store.RunStep
 	runs  map[string]*store.Run
@@ -70,6 +107,9 @@ func (m *mockStore) CreateStep(_ context.Context, step *store.RunStep) error {
 }
 func (m *mockStore) ListSteps(_ context.Context, runID string) ([]*store.RunStep, error) {
 	return m.steps, nil
+}
+func (m *mockStore) PatchScheduledJob(_ context.Context, _, _ string, _ store.ScheduledJobPatch) error {
+	return nil
 }
 
 // mockRunner is a runner.Runner that returns a fixed result for any tool call.
@@ -106,6 +146,26 @@ func TestRun_SingleStep(t *testing.T) {
 	assert.Equal(t, "answer", ms.steps[0].Content)
 	assert.Contains(t, rr.Body.String(), "run.step")
 	assert.Equal(t, 1, strings.Count(rr.Body.String(), "run.step"))
+}
+
+func TestRun_StreamsAssistantDeltasBeforeCompletion(t *testing.T) {
+	ms := newMockStore()
+	ms.runs["run-1"] = makeRun()
+	a := agent.New(&streamingMockProvider{}, ms, 10)
+
+	rr := httptest.NewRecorder()
+	run := makeRun()
+	err := a.Run(context.Background(), run, rr, nil)
+	require.NoError(t, err)
+
+	body := rr.Body.String()
+	assert.Contains(t, body, `"delta":"hel"`)
+	assert.Contains(t, body, `"delta":"lo"`)
+	assert.Equal(t, 2, strings.Count(body, "run.assistant_delta"))
+	assert.Contains(t, body, "run.reasoning_delta")
+	assert.Contains(t, body, `"delta":"checking "`)
+	assert.Equal(t, "hello", run.Response)
+	assert.Greater(t, run.CompletionTokensPerSecond, 0.0)
 }
 
 func TestRun_MultiStep(t *testing.T) {
@@ -201,6 +261,36 @@ func TestRun_ToolCall_ExecutedAndResultFedBack(t *testing.T) {
 
 	// SSE stream must contain a run.tool_call event.
 	assert.Contains(t, rr.Body.String(), "run.tool_call")
+}
+
+func TestRun_ToolCall_DeduplicatesIdenticalCalls(t *testing.T) {
+	mp := &mockProvider{
+		responses: []model.Response{
+			{
+				Content:      "",
+				FinishReason: "tool_calls",
+				ToolCalls: []model.ToolCall{
+					{ID: "tc-1", Name: "memory_delete", Params: map[string]any{"key": "next_reminder_time"}},
+					{ID: "tc-2", Name: "memory_delete", Params: map[string]any{"key": "next_reminder_time"}},
+					{ID: "tc-3", Name: "memory_delete", Params: map[string]any{"key": "next_reminder_message"}},
+				},
+			},
+			{Content: "done", FinishReason: "stop"},
+		},
+	}
+	mr := &mockRunner{result: "deleted"}
+	ms := newMockStore()
+	run := makeRun()
+	ms.runs[run.ID] = run
+
+	a := agent.NewWithOptions(mp, ms, 10, agent.Options{Runner: mr})
+
+	rr := httptest.NewRecorder()
+	err := a.Run(context.Background(), run, rr, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"memory_delete", "memory_delete"}, mr.calls)
+	assert.Len(t, run.ToolCalls, 2)
 }
 
 func TestRun_ToolCall_PolicyDeny(t *testing.T) {
@@ -418,5 +508,5 @@ func (m *mockStore) ListThreadsForUser(_ context.Context, _ string, _ int) ([]st
 func (m *mockStore) GetThreadForUser(_ context.Context, _, _ string) ([]store.ThreadMessage, error) {
 	return nil, nil
 }
-func (m *mockStore) DeleteThreadForUser(_ context.Context, _, _ string) error { return nil }
+func (m *mockStore) DeleteThreadForUser(_ context.Context, _, _ string) error    { return nil }
 func (m *mockStore) RenameThreadForUser(_ context.Context, _, _, _ string) error { return nil }

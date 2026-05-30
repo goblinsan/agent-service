@@ -15,6 +15,7 @@ import (
 type scheduleStore interface {
 	CreateScheduledJob(ctx context.Context, job *store.ScheduledJob) error
 	ListScheduledJobs(ctx context.Context, userID string, limit int) ([]store.ScheduledJob, error)
+	ListScheduledJobHistory(ctx context.Context, userID string, limit int) ([]store.ScheduledJob, error)
 }
 
 var projectCheckinWindowTimes = map[string]string{
@@ -33,7 +34,7 @@ type ScheduleListTool struct {
 func (t *ScheduleListTool) Definition() Tool {
 	return Tool{
 		Name:        "list_schedules",
-		Description: "List the current user's scheduled reminders and recurring check-ins. Use this when the user asks whether they already have a reminder, what is scheduled for tomorrow morning, or wants to review or reconcile upcoming scheduled jobs before creating a new one.",
+		Description: "List the current user's active scheduled reminders and recurring check-ins only. Use this when the user asks whether they have reminders, what is scheduled for tomorrow morning, or wants to review upcoming scheduled jobs before creating a new one. This excludes completed, failed, and cancelled past reminders; use list_schedule_history for history.",
 		Params: []Param{
 			{Name: "limit", Type: "int", Description: "Optional maximum number of schedules to return. Defaults to 25.", Required: false},
 			{Name: "kind", Type: "string", Description: "Optional kind filter, for example reminder or project_checkin.", Required: false},
@@ -43,7 +44,33 @@ func (t *ScheduleListTool) Definition() Tool {
 }
 
 func (t *ScheduleListTool) Execute(ctx context.Context, params map[string]any) (any, error) {
-	if t.Store == nil {
+	return executeScheduleList(ctx, params, t.Store, true)
+}
+
+// ScheduleHistoryListTool returns past and inactive scheduled jobs separately
+// from the default active reminder list.
+type ScheduleHistoryListTool struct {
+	Store scheduleStore
+}
+
+func (t *ScheduleHistoryListTool) Definition() Tool {
+	return Tool{
+		Name:        "list_schedule_history",
+		Description: "List the current user's reminder and schedule history, including completed, failed, and cancelled jobs. Use this only when the user asks for reminder history or past reminders.",
+		Params: []Param{
+			{Name: "limit", Type: "int", Description: "Optional maximum number of schedule history entries to return. Defaults to 25.", Required: false},
+			{Name: "kind", Type: "string", Description: "Optional kind filter, for example reminder or project_checkin.", Required: false},
+			{Name: "status", Type: "string", Description: "Optional status filter, for example pending, running, completed, failed, or cancelled.", Required: false},
+		},
+	}
+}
+
+func (t *ScheduleHistoryListTool) Execute(ctx context.Context, params map[string]any) (any, error) {
+	return executeScheduleList(ctx, params, t.Store, false)
+}
+
+func executeScheduleList(ctx context.Context, params map[string]any, schedules scheduleStore, activeOnly bool) (any, error) {
+	if schedules == nil {
 		return nil, errors.New("schedule store not configured")
 	}
 	userID := UserIDFromContext(ctx)
@@ -75,13 +102,19 @@ func (t *ScheduleListTool) Execute(ctx context.Context, params map[string]any) (
 	statusFilter, _ := params["status"].(string)
 	statusFilter = strings.ToLower(strings.TrimSpace(statusFilter))
 
-	schedules, err := t.Store.ListScheduledJobs(ctx, userID, limit)
+	var jobs []store.ScheduledJob
+	var err error
+	if activeOnly {
+		jobs, err = schedules.ListScheduledJobs(ctx, userID, limit)
+	} else {
+		jobs, err = schedules.ListScheduledJobHistory(ctx, userID, limit)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list schedules: %w", err)
 	}
 
-	out := make([]map[string]any, 0, len(schedules))
-	for _, job := range schedules {
+	out := make([]map[string]any, 0, len(jobs))
+	for _, job := range jobs {
 		if kindFilter != "" && strings.ToLower(strings.TrimSpace(job.Kind)) != kindFilter {
 			continue
 		}
@@ -108,8 +141,9 @@ func (t *ScheduleListTool) Execute(ctx context.Context, params map[string]any) (
 	}
 
 	return map[string]any{
-		"user_id":   userID,
-		"schedules": out,
+		"user_id":     userID,
+		"active_only": activeOnly,
+		"schedules":   out,
 	}, nil
 }
 

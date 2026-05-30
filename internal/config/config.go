@@ -40,6 +40,10 @@ type Config struct {
 	// without an explicit model preference.  Empty means use the model-based
 	// registry pick.
 	AutomationNode string
+	// AgentCatalogPath optionally points at a gateway-control-plane config JSON
+	// file. When set, serviceProfiles.gatewayChatPlatform.agents is used as the
+	// chat persona catalog.
+	AgentCatalogPath string
 	// SchedulerEnabled enables the background scheduler loop.
 	SchedulerEnabled bool
 	// SchedulerPollInterval controls how often due jobs are scanned.
@@ -117,6 +121,7 @@ func Load() *Config {
 		MCPEndpoint:           os.Getenv("MCP_ENDPOINT"),
 		ChatNode:              os.Getenv("CHAT_NODE"),
 		AutomationNode:        os.Getenv("AUTOMATION_NODE"),
+		AgentCatalogPath:      strings.TrimSpace(os.Getenv("AGENT_CATALOG_PATH")),
 		SchedulerEnabled:      schedulerEnabled,
 		SchedulerPollInterval: pollInterval,
 		APNSEnabled:           apnsEnabled,

@@ -163,7 +163,12 @@ func (t *PersonalDataIngestTool) Execute(ctx context.Context, params map[string]
 func defaultPersonalDataSummary(app, domain, source string, rawMetrics any) string {
 	parts := []string{fmt.Sprintf("%s sync", app)}
 	if metricObj, ok := rawMetrics.(map[string]any); ok {
-		for _, key := range []string{"workouts", "active_minutes", "steps", "calories", "calories_consumed", "protein_grams"} {
+		for _, key := range []string{
+			"workouts", "active_minutes", "exercise_minutes", "steps",
+			"distance_miles", "run_distance_miles", "cycling_distance_miles",
+			"active_energy_kcal", "calories", "calories_consumed", "dietary_energy_kcal",
+			"protein_grams", "carbs_grams", "fat_grams", "water_ounces", "weight_lb",
+		} {
 			if v, ok := metricObj[key]; ok {
 				if f, ok := readNumeric(v); ok {
 					parts = append(parts, fmt.Sprintf("%s=%s", key, trimTrailingZeros(f)))
@@ -184,7 +189,10 @@ func findPlanForDomainOrConnector(plans []store.UserPlan, domain, app string) *s
 	for i := range plans {
 		p := &plans[i]
 		for _, c := range p.Connectors {
-			if strings.EqualFold(strings.TrimSpace(c.App), strings.TrimSpace(app)) {
+			appMatches := strings.EqualFold(strings.TrimSpace(c.App), strings.TrimSpace(app))
+			connectorDomain := strings.TrimSpace(c.Domain)
+			domainMatches := connectorDomain == "" || strings.EqualFold(connectorDomain, strings.TrimSpace(domain))
+			if appMatches && domainMatches {
 				return p
 			}
 		}

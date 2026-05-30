@@ -50,6 +50,9 @@ func (m *mockStore) CreateScheduledJob(_ context.Context, _ *store.ScheduledJob)
 func (m *mockStore) ListScheduledJobs(_ context.Context, _ string, _ int) ([]store.ScheduledJob, error) {
 	return nil, nil
 }
+func (m *mockStore) ListScheduledJobHistory(_ context.Context, _ string, _ int) ([]store.ScheduledJob, error) {
+	return nil, nil
+}
 func (m *mockStore) DeleteScheduledJob(_ context.Context, _, _ string) error { return nil }
 func (m *mockStore) AcquireDueScheduledJobs(_ context.Context, _ int, _ time.Duration) ([]store.ScheduledJob, error) {
 	return nil, nil

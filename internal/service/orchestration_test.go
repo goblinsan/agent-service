@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -58,6 +60,27 @@ func (p *kulrsAnalysisProvider) Stream(_ context.Context, _ model.Request, onChu
 	return onChunk(`{"dominant_colors":["#112233","#223344"],"accent_colors":["#445566"],"description":"Moody blue-gold balance."}`)
 }
 
+type captureProvider struct {
+	request model.Request
+}
+
+func (p *captureProvider) Complete(_ context.Context, req model.Request) (*model.Response, error) {
+	p.request = req
+	return &model.Response{Content: "captured", FinishReason: "stop"}, nil
+}
+
+func (p *captureProvider) Stream(_ context.Context, req model.Request, onChunk func(string) error) error {
+	p.request = req
+	return onChunk("captured")
+}
+
+func writeAgentCatalogConfig(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "gateway.config.json")
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
+}
+
 // ---------------------------------------------------------------------------
 // StartChatRun
 // ---------------------------------------------------------------------------
@@ -106,6 +129,179 @@ func TestStartChatRun_EmitsModelSelectedWhenPreferenceSet(t *testing.T) {
 	body := rr.Body.String()
 	assert.Contains(t, body, "run.model_selected")
 	assert.Contains(t, body, "gpt-4")
+}
+
+func TestListAgentsLoadsControlPlaneCatalog(t *testing.T) {
+	catalogPath := writeAgentCatalogConfig(t, `{
+	"serviceProfiles": {
+		"gatewayChatPlatform": {
+			"agents": [
+				{
+					"id": "planner",
+					"name": "Planner",
+					"icon": "PL",
+					"color": "#354F52",
+					"providerName": "lm-studio-a",
+					"model": "planner-model",
+					"costClass": "free",
+					"systemPrompt": "Keep the plan tight.",
+					"endpointConfig": {
+						"baseUrl": "https://private.example.test/v1",
+						"apiKey": "secret",
+						"modelParams": {
+							"ttsVoiceId": "ariel"
+						}
+					},
+					"enabled": true
+				},
+				{
+					"id": "disabled",
+					"name": "Disabled",
+					"enabled": false
+				}
+			]
+		}
+	}
+}`)
+	svc := service.NewWithOptions(newMockStore(), &mockProvider{}, 10, service.ServiceOptions{AgentCatalogPath: catalogPath})
+
+	agents := svc.ListAgents()
+
+	require.Len(t, agents, 1)
+	assert.Equal(t, "planner", agents[0].ID)
+	assert.Equal(t, "remote", agents[0].Source)
+	assert.Equal(t, "ariel", agents[0].TTSVoiceID)
+	assert.Empty(t, agents[0].SystemPrompt)
+	assert.Empty(t, agents[0].EndpointConfig.BaseURL)
+	assert.Empty(t, agents[0].EndpointConfig.APIKey)
+	assert.Empty(t, agents[0].EndpointConfig.ModelParams)
+}
+
+func TestStartGatewayRunAppliesControlPlanePersona(t *testing.T) {
+	catalogPath := writeAgentCatalogConfig(t, `{
+	"serviceProfiles": {
+		"gatewayChatPlatform": {
+			"agents": [
+				{
+					"id": "planner",
+					"name": "Planner",
+					"providerName": "lm-studio-a",
+					"model": "planner-model",
+					"costClass": "free",
+					"systemPrompt": "Keep the plan tight.",
+					"enabled": true
+				}
+			]
+		}
+	}
+}`)
+	provider := &captureProvider{}
+	svc := service.NewWithOptions(newMockStore(), provider, 10, service.ServiceOptions{AgentCatalogPath: catalogPath})
+	req := &service.GatewayRunRequest{
+		AgentID: "planner",
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "What should I do next?"},
+		},
+	}
+
+	require.NoError(t, svc.StartGatewayRun(context.Background(), req, httptest.NewRecorder()))
+
+	assert.Equal(t, "planner-model", provider.request.Model)
+	require.NotEmpty(t, provider.request.Messages)
+	assert.Equal(t, model.RoleSystem, provider.request.Messages[0].Role)
+	assert.Contains(t, provider.request.Messages[0].Content, "You are Planner.")
+	assert.Contains(t, provider.request.Messages[0].Content, "Keep the plan tight.")
+}
+
+func TestStartGatewayRunCanDisablePersonalContextForAgent(t *testing.T) {
+	catalogPath := writeAgentCatalogConfig(t, `{
+	"serviceProfiles": {
+		"gatewayChatPlatform": {
+			"agents": [
+				{
+					"id": "mermaid",
+					"name": "Mermaid",
+					"providerName": "lm-studio-a",
+					"model": "story-model",
+					"costClass": "free",
+					"systemPrompt": "Tell playful ocean stories.",
+					"personalContext": { "enabled": false },
+					"enabled": true
+				}
+			]
+		}
+	}
+}`)
+	mockUsers.mu.Lock()
+	mockUsers.memories["parent"] = map[string]store.UserMemory{
+		"profile.identity.name": {Key: "profile.identity.name", Value: "Parent", Confidence: 1},
+		"favorite_goal":         {Key: "favorite_goal", Value: "Build the business", Confidence: 1},
+	}
+	mockUsers.plans["parent"] = map[string]store.UserPlan{
+		"plan-1": {ID: "plan-1", UserID: "parent", Title: "Exit corp gig", Status: "active"},
+	}
+	mockUsers.mu.Unlock()
+
+	provider := &captureProvider{}
+	svc := service.NewWithOptions(newMockStore(), provider, 10, service.ServiceOptions{AgentCatalogPath: catalogPath})
+	req := &service.GatewayRunRequest{
+		AgentID: "mermaid",
+		UserID:  "parent",
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "Tell my daughter a story."},
+		},
+	}
+
+	require.NoError(t, svc.StartGatewayRun(context.Background(), req, httptest.NewRecorder()))
+	require.Len(t, provider.request.Messages, 3)
+	assert.Contains(t, provider.request.Messages[0].Content, "You are Mermaid.")
+	assert.Contains(t, provider.request.Messages[1].Content, "configured without personal context")
+	assert.NotContains(t, provider.request.Messages[1].Content, "User profile:")
+	assert.NotContains(t, provider.request.Messages[1].Content, "Active plans:")
+	assert.NotContains(t, provider.request.Messages[1].Content, "Exit corp gig")
+	assert.NotContains(t, provider.request.Messages[1].Content, "Build the business")
+}
+
+func TestStartGatewayRunUsesCatalogEndpointOverride(t *testing.T) {
+	catalogPath := writeAgentCatalogConfig(t, `{
+	"serviceProfiles": {
+		"gatewayChatPlatform": {
+			"agents": [
+				{
+					"id": "expert-planner",
+					"name": "Expert Planner",
+					"providerName": "openai-main",
+					"model": "planning-model",
+					"costClass": "premium",
+					"systemPrompt": "Think carefully.",
+					"endpointConfig": {
+						"baseUrl": "https://api.example.test/v1",
+						"apiKey": "test-api-key"
+					},
+					"enabled": true
+				}
+			]
+		}
+	}
+}`)
+	provider := &captureProvider{}
+	svc := service.NewWithOptions(newMockStore(), provider, 10, service.ServiceOptions{
+		AgentCatalogPath: catalogPath,
+		ChatNode:         "papai",
+	})
+	req := &service.GatewayRunRequest{
+		AgentID: "expert-planner",
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "Build a plan."},
+		},
+	}
+
+	require.NoError(t, svc.StartGatewayRun(context.Background(), req, httptest.NewRecorder()))
+
+	assert.Equal(t, "planning-model", provider.request.Model)
+	assert.Empty(t, provider.request.BackendNode)
+	assert.Equal(t, "https://api.example.test/v1", provider.request.BackendBaseURL)
+	assert.Equal(t, "test-api-key", provider.request.BackendAPIKey)
 }
 
 func TestStartChatRun_NoModelSelectedEventWhenNoPreference(t *testing.T) {

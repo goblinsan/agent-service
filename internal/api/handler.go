@@ -79,6 +79,7 @@ func NewRouterWithOptions(svc *service.Service, opts RouterOptions) http.Handler
 
 	// Internal orchestration endpoints – designed for gateway-chat-platform and
 	// automation callers, not for direct browser use.
+	r.Get("/internal/agents", listAgentsHandler(svc))
 	r.Post("/internal/chat", internalChatHandler(svc, opts.Metrics))
 	r.Post("/internal/automation", internalAutomationHandler(svc, opts.Metrics))
 	r.Post("/run", gatewayRunHandler(svc, opts.Metrics))
@@ -103,7 +104,15 @@ func NewRouterWithOptions(svc *service.Service, opts RouterOptions) http.Handler
 	// Scheduler endpoints.
 	r.Post("/internal/schedules", createScheduleHandler(svc))
 	r.Get("/internal/schedules", listSchedulesHandler(svc))
+	r.Get("/internal/schedules/history", listScheduleHistoryHandler(svc))
+	r.Patch("/internal/schedules/{id}", patchScheduleHandler(svc))
+	r.Post("/internal/schedules/{id}/pause", pauseScheduleHandler(svc))
+	r.Post("/internal/schedules/{id}/resume", resumeScheduleHandler(svc))
 	r.Delete("/internal/schedules/{id}", deleteScheduleHandler(svc))
+
+	// Structured user profile endpoints. Backed by profile.* durable memories.
+	r.Get("/internal/profile", getProfileHandler(svc))
+	r.Put("/internal/profile", putProfileHandler(svc))
 
 	// Plan CRUD endpoints.
 	r.Get("/internal/plans", listPlansHandler(svc))
@@ -111,6 +120,10 @@ func NewRouterWithOptions(svc *service.Service, opts RouterOptions) http.Handler
 	r.Post("/internal/plans", upsertPlanHandler(svc))
 	r.Post("/internal/plans/import", importPlanHandler(svc))
 	r.Delete("/internal/plans/{id}", deletePlanHandler(svc))
+
+	// Apple Health foreground summary ingest from GatewayApp.
+	r.Post("/internal/apple-health/summary", appleHealthSummaryHandler(svc))
+	r.Post("/internal/personal-data/batches", personalDataBatchHandler(svc))
 
 	// Push token registration endpoints.
 	r.Post("/internal/device-tokens", registerDeviceTokenHandler(svc))
@@ -122,6 +135,52 @@ func NewRouterWithOptions(svc *service.Service, opts RouterOptions) http.Handler
 	}
 
 	return r
+}
+
+func personalDataBatchHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		var req service.PersonalDataBatchRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		result, err := svc.IngestPersonalDataBatch(r.Context(), userID, req)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+		if err := json.NewEncoder(w).Encode(result); err != nil {
+			slog.Error("failed to encode personal data batch response", "error", err)
+		}
+	}
+}
+
+func appleHealthSummaryHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		var req service.AppleHealthSummaryRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		result, err := svc.IngestAppleHealthSummary(r.Context(), userID, req)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+		if err := json.NewEncoder(w).Encode(result); err != nil {
+			slog.Error("failed to encode apple health summary response", "error", err)
+		}
+	}
 }
 
 func healthHandler() http.HandlerFunc {
@@ -802,6 +861,82 @@ func listSchedulesHandler(svc *service.Service) http.HandlerFunc {
 	}
 }
 
+func listScheduleHistoryHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		limit := 100
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		jobs, err := svc.ListScheduledJobHistory(r.Context(), userID, limit)
+		if err != nil {
+			slog.Error("list schedule history failed", "error", err, "user_id", userID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		if jobs == nil {
+			jobs = []store.ScheduledJob{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"schedules": jobs}); err != nil {
+			slog.Error("failed to encode schedule history response", "error", err)
+		}
+	}
+}
+
+func getProfileHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		profile, err := svc.GetUserProfile(r.Context(), userID)
+		if err != nil {
+			slog.Error("get profile failed", "error", err, "user_id", userID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"profile": profile}); err != nil {
+			slog.Error("failed to encode profile response", "error", err)
+		}
+	}
+}
+
+func putProfileHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		var req struct {
+			Profile store.UserProfile `json:"profile"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		profile, err := svc.UpsertUserProfile(r.Context(), userID, &req.Profile)
+		if err != nil {
+			slog.Error("put profile failed", "error", err, "user_id", userID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"profile": profile}); err != nil {
+			slog.Error("failed to encode profile response", "error", err)
+		}
+	}
+}
+
 func deleteScheduleHandler(svc *service.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
@@ -825,6 +960,113 @@ func deleteScheduleHandler(svc *service.Service) http.HandlerFunc {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+func patchScheduleHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		id := strings.TrimSpace(chi.URLParam(r, "id"))
+		if id == "" {
+			http.Error(w, `{"error":"schedule id is required"}`, http.StatusBadRequest)
+			return
+		}
+		var req struct {
+			Kind       *string        `json:"kind"`
+			Prompt     *string        `json:"prompt"`
+			ThreadID   *string        `json:"thread_id"`
+			AgentID    *string        `json:"agent_id"`
+			Payload    map[string]any `json:"payload"`
+			RunAt      *string        `json:"run_at"`
+			Recurrence *string        `json:"recurrence"`
+			Timezone   *string        `json:"timezone"`
+			Status     *string        `json:"status"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		patch := store.ScheduledJobPatch{
+			Kind:       trimStringPtr(req.Kind),
+			Prompt:     trimStringPtr(req.Prompt),
+			ThreadID:   trimStringPtr(req.ThreadID),
+			AgentID:    trimStringPtr(req.AgentID),
+			Payload:    req.Payload,
+			PayloadSet: req.Payload != nil,
+			Recurrence: trimStringPtr(req.Recurrence),
+			Timezone:   trimStringPtr(req.Timezone),
+			Status:     trimStringPtr(req.Status),
+			ClearLock:  req.Status != nil,
+		}
+		if patch.Prompt != nil && *patch.Prompt == "" {
+			http.Error(w, `{"error":"prompt cannot be empty"}`, http.StatusBadRequest)
+			return
+		}
+		if req.RunAt != nil {
+			runAt, err := time.Parse(time.RFC3339, strings.TrimSpace(*req.RunAt))
+			if err != nil {
+				http.Error(w, `{"error":"run_at must be RFC3339"}`, http.StatusBadRequest)
+				return
+			}
+			runAt = runAt.UTC()
+			patch.RunAt = &runAt
+		}
+		if err := svc.PatchScheduledJob(r.Context(), userID, id, patch); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				http.Error(w, `{"error":"schedule not found"}`, http.StatusNotFound)
+				return
+			}
+			slog.Error("patch schedule failed", "error", err, "user_id", userID, "schedule_id", id)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func pauseScheduleHandler(svc *service.Service) http.HandlerFunc {
+	return scheduleStatusHandler(svc, "paused")
+}
+
+func resumeScheduleHandler(svc *service.Service) http.HandlerFunc {
+	return scheduleStatusHandler(svc, "pending")
+}
+
+func scheduleStatusHandler(svc *service.Service, status string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		id := strings.TrimSpace(chi.URLParam(r, "id"))
+		if id == "" {
+			http.Error(w, `{"error":"schedule id is required"}`, http.StatusBadRequest)
+			return
+		}
+		statusValue := status
+		if err := svc.PatchScheduledJob(r.Context(), userID, id, store.ScheduledJobPatch{Status: &statusValue, ClearLock: true}); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				http.Error(w, `{"error":"schedule not found"}`, http.StatusNotFound)
+				return
+			}
+			slog.Error("schedule status update failed", "error", err, "user_id", userID, "schedule_id", id, "status", status)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func trimStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	return &trimmed
 }
 
 func listPlansHandler(svc *service.Service) http.HandlerFunc {

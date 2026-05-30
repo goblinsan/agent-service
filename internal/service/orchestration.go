@@ -160,8 +160,10 @@ type GatewayRunResponse struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	} `json:"message"`
-	Status             string `json:"status,omitempty"`
-	OrchestrationState *struct {
+	Status                    string       `json:"status,omitempty"`
+	Usage                     *model.Usage `json:"usage,omitempty"`
+	CompletionTokensPerSecond float64      `json:"completionTokensPerSecond,omitempty"`
+	OrchestrationState        *struct {
 		RunID             string   `json:"runId,omitempty"`
 		CheckpointID      string   `json:"checkpointId,omitempty"`
 		Reason            string   `json:"reason,omitempty"`
@@ -176,31 +178,40 @@ func (s *Service) StartChatRun(ctx context.Context, req *ChatRunRequest, w http.
 	// Derive a prompt string for the run record while preserving the full message
 	// history for the model call itself.
 	initialMessages := buildChatMessages(req)
-	initialMessages = s.prependUserContext(ctx, req.UserID, initialMessages)
+	agentConfig, hasAgentConfig := s.resolveAgent(req.AgentID)
+	personalContext := personalContextPolicyForAgent(agentConfig, hasAgentConfig)
+	initialMessages = prependAgentPersona(agentConfig, hasAgentConfig, initialMessages)
+	initialMessages = s.prependUserContext(ctx, req.UserID, initialMessages, personalContext)
 	prompt := derivePrompt(initialMessages, req.SystemPrompt)
 
 	modelBackend := ""
 	if req.ModelPreferences != nil {
 		modelBackend = req.ModelPreferences.Preferred
 	}
+	if modelBackend == "" && hasAgentConfig {
+		modelBackend = agentConfig.Model
+	}
+	backendNode, backendBaseURL, backendAPIKey := s.chatBackendForAgent(agentConfig, hasAgentConfig)
 	if s.ChatModel() != "" {
 		modelBackend = s.ChatModel()
 	}
 
 	run := &store.Run{
-		ID:           newID(),
-		SessionID:    req.ThreadID,
-		Source:       string(store.RunSourceChat),
-		Prompt:       prompt,
-		Status:       "created",
-		ModelBackend: modelBackend,
-		BackendNode:  s.ChatNode(),
-		RequestID:    req.RequestID,
-		ThreadID:     req.ThreadID,
-		UserID:       req.UserID,
-		AgentID:      req.AgentID,
-		CreatedAt:    time.Now().UTC(),
-		UpdatedAt:    time.Now().UTC(),
+		ID:             newID(),
+		SessionID:      req.ThreadID,
+		Source:         string(store.RunSourceChat),
+		Prompt:         prompt,
+		Status:         "created",
+		ModelBackend:   modelBackend,
+		BackendNode:    backendNode,
+		BackendBaseURL: backendBaseURL,
+		BackendAPIKey:  backendAPIKey,
+		RequestID:      req.RequestID,
+		ThreadID:       req.ThreadID,
+		UserID:         req.UserID,
+		AgentID:        req.AgentID,
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
 	}
 	if err := s.store.CreateRun(ctx, run); err != nil {
 		return fmt.Errorf("create run: %w", err)
@@ -238,7 +249,7 @@ func (s *Service) StartChatRun(ctx context.Context, req *ChatRunRequest, w http.
 	}
 
 	observer := newObservedRunWriter(w)
-	done := s.startManagedRun(run, observer, buildRunPolicy(req.ToolPolicy), initialMessages)
+	done := s.startManagedRun(run, observer, combinePolicies(buildRunPolicy(req.ToolPolicy), personalContextToolPolicy(personalContext)), initialMessages)
 	paused, err := s.waitForRunOutcome(ctx, run, observer, done)
 	if paused != nil {
 		return nil
@@ -252,14 +263,19 @@ func (s *Service) StartGatewayRun(ctx context.Context, req *GatewayRunRequest, w
 	if len(req.Messages) == 0 {
 		return fmt.Errorf("messages is required")
 	}
+	agentConfig, hasAgentConfig := s.resolveAgent(req.AgentID)
+	personalContext := personalContextPolicyForAgent(agentConfig, hasAgentConfig)
 	source := string(store.RunSourceChat)
 	if req.WorkflowID != "" || req.DeliveryMode != "" || req.ChannelID != "" {
 		source = string(store.RunSourceAutomation)
 	}
 	modelBackend := req.Model
-	backendNode := ""
+	if modelBackend == "" && hasAgentConfig {
+		modelBackend = agentConfig.Model
+	}
+	backendNode, backendBaseURL, backendAPIKey := "", "", ""
 	if source == string(store.RunSourceChat) {
-		backendNode = s.ChatNode()
+		backendNode, backendBaseURL, backendAPIKey = s.chatBackendForAgent(agentConfig, hasAgentConfig)
 		if s.ChatModel() != "" {
 			modelBackend = s.ChatModel()
 		}
@@ -272,20 +288,22 @@ func (s *Service) StartGatewayRun(ctx context.Context, req *GatewayRunRequest, w
 		}
 	}
 	run := &store.Run{
-		ID:           newID(),
-		SessionID:    req.ThreadID,
-		Source:       source,
-		Prompt:       derivePrompt(req.Messages, ""),
-		Status:       "created",
-		ModelBackend: modelBackend,
-		BackendNode:  backendNode,
-		ThreadID:     req.ThreadID,
-		UserID:       req.UserID,
-		AgentID:      req.AgentID,
-		WorkflowID:   req.WorkflowID,
-		JobType:      req.WorkflowSource,
-		CreatedAt:    time.Now().UTC(),
-		UpdatedAt:    time.Now().UTC(),
+		ID:             newID(),
+		SessionID:      req.ThreadID,
+		Source:         source,
+		Prompt:         derivePrompt(req.Messages, ""),
+		Status:         "created",
+		ModelBackend:   modelBackend,
+		BackendNode:    backendNode,
+		BackendBaseURL: backendBaseURL,
+		BackendAPIKey:  backendAPIKey,
+		ThreadID:       req.ThreadID,
+		UserID:         req.UserID,
+		AgentID:        req.AgentID,
+		WorkflowID:     req.WorkflowID,
+		JobType:        req.WorkflowSource,
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
 	}
 	if err := s.store.CreateRun(ctx, run); err != nil {
 		return fmt.Errorf("create run: %w", err)
@@ -297,8 +315,9 @@ func (s *Service) StartGatewayRun(ctx context.Context, req *GatewayRunRequest, w
 	}
 	dw := &discardResponseWriter{}
 	start := time.Now()
-	messagesWithContext := s.prependUserContext(ctx, req.UserID, req.Messages)
-	if err := s.agent.RunWithMessages(ctx, run, dw, nil, messagesWithContext); err != nil {
+	messagesWithContext := prependAgentPersona(agentConfig, hasAgentConfig, req.Messages)
+	messagesWithContext = s.prependUserContext(ctx, req.UserID, messagesWithContext, personalContext)
+	if err := s.agent.RunWithMessages(ctx, run, dw, personalContextToolPolicy(personalContext), messagesWithContext); err != nil {
 		run.Status = "failed"
 		run.UpdatedAt = time.Now().UTC()
 		_ = s.store.UpdateRun(ctx, run)
@@ -317,6 +336,13 @@ func (s *Service) StartGatewayRun(ctx context.Context, req *GatewayRunRequest, w
 		Model:          firstNonEmpty(run.ModelBackend, req.Model),
 		ResultThreadID: req.ThreadID,
 	}
+	if run.Usage.TotalTokens > 0 {
+		usage := run.Usage
+		resp.Usage = &usage
+	}
+	if run.CompletionTokensPerSecond > 0 {
+		resp.CompletionTokensPerSecond = run.CompletionTokensPerSecond
+	}
 	resp.Message.Role = string(model.RoleAssistant)
 	resp.Message.Content = run.Response
 	return json.NewEncoder(w).Encode(resp)
@@ -326,31 +352,40 @@ func (s *Service) StartGatewayRun(ctx context.Context, req *GatewayRunRequest, w
 // returns a single JSON response instead of streaming SSE events.
 func (s *Service) StartChatRunSync(ctx context.Context, req *ChatRunRequest, w http.ResponseWriter) error {
 	initialMessages := buildChatMessages(req)
-	initialMessages = s.prependUserContext(ctx, req.UserID, initialMessages)
+	agentConfig, hasAgentConfig := s.resolveAgent(req.AgentID)
+	personalContext := personalContextPolicyForAgent(agentConfig, hasAgentConfig)
+	initialMessages = prependAgentPersona(agentConfig, hasAgentConfig, initialMessages)
+	initialMessages = s.prependUserContext(ctx, req.UserID, initialMessages, personalContext)
 	prompt := derivePrompt(initialMessages, req.SystemPrompt)
 
 	modelBackend := ""
 	if req.ModelPreferences != nil {
 		modelBackend = req.ModelPreferences.Preferred
 	}
+	if modelBackend == "" && hasAgentConfig {
+		modelBackend = agentConfig.Model
+	}
+	backendNode, backendBaseURL, backendAPIKey := s.chatBackendForAgent(agentConfig, hasAgentConfig)
 	if s.ChatModel() != "" {
 		modelBackend = s.ChatModel()
 	}
 
 	run := &store.Run{
-		ID:           newID(),
-		SessionID:    req.ThreadID,
-		Source:       string(store.RunSourceChat),
-		Prompt:       prompt,
-		Status:       "created",
-		ModelBackend: modelBackend,
-		BackendNode:  s.ChatNode(),
-		RequestID:    req.RequestID,
-		ThreadID:     req.ThreadID,
-		UserID:       req.UserID,
-		AgentID:      req.AgentID,
-		CreatedAt:    time.Now().UTC(),
-		UpdatedAt:    time.Now().UTC(),
+		ID:             newID(),
+		SessionID:      req.ThreadID,
+		Source:         string(store.RunSourceChat),
+		Prompt:         prompt,
+		Status:         "created",
+		ModelBackend:   modelBackend,
+		BackendNode:    backendNode,
+		BackendBaseURL: backendBaseURL,
+		BackendAPIKey:  backendAPIKey,
+		RequestID:      req.RequestID,
+		ThreadID:       req.ThreadID,
+		UserID:         req.UserID,
+		AgentID:        req.AgentID,
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
 	}
 	if err := s.store.CreateRun(ctx, run); err != nil {
 		return fmt.Errorf("create run: %w", err)
@@ -361,7 +396,7 @@ func (s *Service) StartChatRunSync(ctx context.Context, req *ChatRunRequest, w h
 		return fmt.Errorf("update run in_progress: %w", err)
 	}
 	observer := newObservedRunWriter(nil)
-	done := s.startManagedRun(run, observer, buildRunPolicy(req.ToolPolicy), initialMessages)
+	done := s.startManagedRun(run, observer, combinePolicies(buildRunPolicy(req.ToolPolicy), personalContextToolPolicy(personalContext)), initialMessages)
 	paused, err := s.waitForRunOutcome(ctx, run, observer, done)
 	if err != nil {
 		return err
@@ -371,6 +406,13 @@ func (s *Service) StartChatRunSync(ctx context.Context, req *ChatRunRequest, w h
 		UsedProvider:   "agent-service",
 		Model:          firstNonEmpty(run.ModelBackend, preferredModel(req.ModelPreferences)),
 		ResultThreadID: req.ThreadID,
+	}
+	if run.Usage.TotalTokens > 0 {
+		usage := run.Usage
+		resp.Usage = &usage
+	}
+	if run.CompletionTokensPerSecond > 0 {
+		resp.CompletionTokensPerSecond = run.CompletionTokensPerSecond
 	}
 	if paused != nil {
 		resp.Status = "approval_required"
@@ -412,8 +454,10 @@ func (s *Service) StartAutomationRun(ctx context.Context, req *AutomationRunRequ
 		backendNode = firstNonEmpty(s.AutomationNode(), s.ChatNode())
 	}
 
+	agentConfig, hasAgentConfig := s.resolveAgent(req.AgentID)
+	personalContext := personalContextPolicyForAgent(agentConfig, hasAgentConfig)
 	initialMessages := buildAutomationMessages(req)
-	runPolicy := buildRunPolicy(effectiveAutomationToolPolicy(req))
+	runPolicy := combinePolicies(buildRunPolicy(effectiveAutomationToolPolicy(req)), personalContextToolPolicy(personalContext))
 	run := &store.Run{
 		ID:           newID(),
 		SessionID:    req.ThreadID,
@@ -778,6 +822,27 @@ func buildChatMessages(req *ChatRunRequest) []model.Message {
 	}
 	messages = append(messages, req.Messages...)
 	return messages
+}
+
+func prependAgentPersona(agent AgentConfig, ok bool, messages []model.Message) []model.Message {
+	if !ok || strings.TrimSpace(agent.SystemPrompt) == "" {
+		return messages
+	}
+	content := strings.TrimSpace(agent.SystemPrompt)
+	if agent.Name != "" {
+		content = fmt.Sprintf("You are %s.\n\n%s", agent.Name, content)
+	}
+	result := make([]model.Message, 0, len(messages)+1)
+	result = append(result, model.Message{Role: model.RoleSystem, Content: content})
+	result = append(result, messages...)
+	return result
+}
+
+func (s *Service) chatBackendForAgent(agent AgentConfig, ok bool) (node string, baseURL string, apiKey string) {
+	if ok && strings.TrimSpace(agent.EndpointConfig.BaseURL) != "" && strings.TrimSpace(agent.EndpointConfig.APIKey) != "" {
+		return "", strings.TrimRight(strings.TrimSpace(agent.EndpointConfig.BaseURL), "/"), strings.TrimSpace(agent.EndpointConfig.APIKey)
+	}
+	return s.ChatNode(), "", ""
 }
 
 func buildAutomationMessages(req *AutomationRunRequest) []model.Message {

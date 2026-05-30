@@ -48,6 +48,13 @@ type ServiceOptions struct {
 	// NotificationDispatcher, when non-nil, is called after a notification row
 	// is persisted so external channels (for example APNs) can be fanned out.
 	NotificationDispatcher NotificationDispatcher
+	// LocalTimezone is the user's/operator's IANA timezone for date-sensitive
+	// system context. Empty falls back to UTC.
+	LocalTimezone string
+	// AgentCatalogPath optionally points at a gateway-control-plane config JSON
+	// file whose serviceProfiles.gatewayChatPlatform.agents entries become
+	// chat personas.
+	AgentCatalogPath string
 }
 
 // NotificationDispatcher fan-outs persisted notifications to external channels.
@@ -66,6 +73,8 @@ type Service struct {
 	chatModel       string
 	automationModel string
 	notifier        NotificationDispatcher
+	localTimezone   string
+	agentCatalog    *agentCatalog
 }
 
 // ChatNode returns the current chat-routing node name (may be empty).
@@ -135,7 +144,21 @@ func NewWithOptions(s store.Store, p model.Provider, maxSteps int, opts ServiceO
 		chatModel:       opts.ChatModel,
 		automationModel: opts.AutomationModel,
 		notifier:        opts.NotificationDispatcher,
+		localTimezone:   opts.LocalTimezone,
+		agentCatalog:    newAgentCatalog(opts.AgentCatalogPath),
 	}
+}
+
+func (s *Service) ListAgents() []AgentConfig {
+	model := firstNonEmpty(s.ChatModel(), s.ChatNode(), "agent-service")
+	return s.agentCatalog.list(model)
+}
+
+func (s *Service) resolveAgent(id string) (AgentConfig, bool) {
+	if s == nil || s.agentCatalog == nil {
+		return AgentConfig{}, false
+	}
+	return s.agentCatalog.get(id)
 }
 
 func (s *Service) CreateSession(ctx context.Context, name, description string) (*store.Session, error) {

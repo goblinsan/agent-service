@@ -23,6 +23,10 @@ func (f *fakeScheduleStore) ListScheduledJobs(_ context.Context, _ string, _ int
 	return f.listed, nil
 }
 
+func (f *fakeScheduleStore) ListScheduledJobHistory(_ context.Context, _ string, _ int) ([]store.ScheduledJob, error) {
+	return f.listed, nil
+}
+
 func TestScheduleCreateToolUsesDelayAndRunContextDefaults(t *testing.T) {
 	st := &fakeScheduleStore{}
 	tool := &ScheduleCreateTool{Store: st}

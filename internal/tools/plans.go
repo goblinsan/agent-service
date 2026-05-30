@@ -15,7 +15,8 @@ import (
 
 // PlanListTool returns the caller's active plans/goals.
 type PlanListTool struct {
-	Store store.Store
+	Store    store.Store
+	Location string
 }
 
 func (t *PlanListTool) Definition() Tool {
@@ -38,13 +39,19 @@ func (t *PlanListTool) Execute(ctx context.Context, _ map[string]any) (any, erro
 		return nil, fmt.Errorf("list plans: %w", err)
 	}
 	out := make([]map[string]any, 0, len(plans))
+	localNow := time.Now().UTC().In(resolveLocation(t.Location))
 	for _, p := range plans {
-		out = append(out, summarizePlanForTool(p))
+		out = append(out, summarizePlanForTool(p, localNow))
 	}
-	return map[string]any{"user_id": uid, "plans": out}, nil
+	return map[string]any{
+		"user_id":       uid,
+		"local_date":    localNow.Format("2006-01-02"),
+		"local_weekday": localNow.Weekday().String(),
+		"plans":         out,
+	}, nil
 }
 
-func summarizePlanForTool(p store.UserPlan) map[string]any {
+func summarizePlanForTool(p store.UserPlan, localNow time.Time) map[string]any {
 	const maxMilestones = 4
 	const maxTasksPerMilestone = 3
 	const maxSteps = 6
@@ -95,20 +102,22 @@ func summarizePlanForTool(p store.UserPlan) map[string]any {
 	}
 
 	out := map[string]any{
-		"id":             p.ID,
-		"title":          p.Title,
-		"status":         p.Status,
-		"vision":         p.Vision,
-		"target":         p.Target,
-		"category":       p.Category,
-		"tags":           p.Tags,
-		"data_sources":   p.DataSources,
-		"connectors":     p.Connectors,
-		"review_cadence": p.ReviewCadence,
-		"summary":        p.Summary,
-		"metrics":        p.Metrics,
-		"progress":       p.Progress,
-		"updated_at":     p.UpdatedAt,
+		"id":              p.ID,
+		"title":           p.Title,
+		"status":          p.Status,
+		"vision":          p.Vision,
+		"target":          p.Target,
+		"category":        p.Category,
+		"tags":            p.Tags,
+		"data_sources":    p.DataSources,
+		"connectors":      p.Connectors,
+		"review_cadence":  p.ReviewCadence,
+		"summary":         p.Summary,
+		"metrics":         p.Metrics,
+		"progress":        p.Progress,
+		"today_actions":   store.PlanTodayActions(p, localNow),
+		"next_open_tasks": store.PlanNextOpenTasks(p, 3),
+		"updated_at":      p.UpdatedAt,
 	}
 	if len(milestones) > 0 {
 		out["milestones"] = milestones
@@ -123,6 +132,17 @@ func summarizePlanForTool(p store.UserPlan) map[string]any {
 		}
 	}
 	return out
+}
+
+func resolveLocation(name string) *time.Location {
+	if strings.TrimSpace(name) == "" {
+		name = "UTC"
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
 }
 
 func minInt(a, b int) int {

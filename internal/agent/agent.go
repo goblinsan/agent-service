@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -98,12 +99,16 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 	// response; we ask it to continue (see below) and stitch the partials back
 	// together so callers see one coherent assistant response.
 	var accumulated strings.Builder
+	var finalCompletionTokens int
+	var finalCompletionElapsed time.Duration
 
 	// Steps are 1-based to align with human-readable step numbers in traces and SSE events.
 	for i := 1; i <= a.maxSteps; i++ {
-		resp, err := a.provider.Complete(ctx, model.Request{
+		resp, streamed, elapsed, err := a.completeModelStep(ctx, w, run, model.Request{
 			Model:                 run.ModelBackend,
 			BackendNode:           run.BackendNode,
+			BackendBaseURL:        run.BackendBaseURL,
+			BackendAPIKey:         run.BackendAPIKey,
 			Messages:              messages,
 			MaxTokens:             16384,
 			EstimatedPromptTokens: estimatePromptTokens(messages),
@@ -112,12 +117,15 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 		if err != nil {
 			return fmt.Errorf("agent step %d: %w", i, err)
 		}
+		rawToolCalls := len(resp.ToolCalls)
+		resp.ToolCalls = dedupeToolCalls(resp.ToolCalls)
 		slog.Info("agent step",
 			"run_id", run.ID,
 			"step", i,
 			"advertised_tools", len(a.toolSpecs),
 			"finish_reason", resp.FinishReason,
 			"tool_calls", len(resp.ToolCalls),
+			"raw_tool_calls", rawToolCalls,
 			"content_len", len(resp.Content),
 		)
 		for _, tc := range resp.ToolCalls {
@@ -171,7 +179,7 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 				if execErr != nil {
 					rtc.Error = execErr.Error()
 				} else {
-					rtc.Result = fmt.Sprintf("%v", result)
+					rtc.Result = formatToolResult(result)
 				}
 				run.ToolCalls = append(run.ToolCalls, rtc)
 				if err := a.store.UpdateRun(ctx, run); err != nil {
@@ -200,16 +208,21 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 		// No tool calls – check for termination.
 		if resp.FinishReason == "stop" || i == a.maxSteps {
 			accumulated.WriteString(resp.Content)
+			finalCompletionElapsed += elapsed
+			finalCompletionTokens += completionTokenCount(resp)
 			finalContent := accumulated.String()
-			for _, chunk := range chunkAssistantContent(finalContent) {
-				if err := sse.Write(w, sse.Event{
-					Type: sse.EventRunAssistantDelta,
-					Data: sse.AssistantDeltaPayload{RunID: run.ID, Delta: chunk},
-				}); err != nil {
-					return err
+			if !streamed {
+				for _, chunk := range chunkAssistantContent(finalContent) {
+					if err := sse.Write(w, sse.Event{
+						Type: sse.EventRunAssistantDelta,
+						Data: sse.AssistantDeltaPayload{RunID: run.ID, Delta: chunk},
+					}); err != nil {
+						return err
+					}
 				}
 			}
 			run.Response = finalContent
+			setCompletionThroughput(run, finalContent, finalCompletionTokens, finalCompletionElapsed)
 			break
 		}
 
@@ -220,6 +233,8 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 		// messages — llama.cpp's OpenAI-compatible endpoint rejects that with a 400
 		// ("Cannot have 2 or more assistant messages at the end of the list.").
 		accumulated.WriteString(resp.Content)
+		finalCompletionElapsed += elapsed
+		finalCompletionTokens += completionTokenCount(resp)
 		messages = append(messages, model.Message{Role: model.RoleAssistant, Content: resp.Content})
 		messages = append(messages, model.Message{
 			Role:    model.RoleUser,
@@ -228,6 +243,116 @@ func (a *Agent) RunWithMessages(ctx context.Context, run *store.Run, w http.Resp
 	}
 
 	return nil
+}
+
+func dedupeToolCalls(calls []model.ToolCall) []model.ToolCall {
+	if len(calls) < 2 {
+		return calls
+	}
+	seen := make(map[string]struct{}, len(calls))
+	out := make([]model.ToolCall, 0, len(calls))
+	for _, call := range calls {
+		key := toolCallDedupeKey(call)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, call)
+	}
+	return out
+}
+
+func toolCallDedupeKey(call model.ToolCall) string {
+	raw, err := json.Marshal(call.Params)
+	if err != nil {
+		return call.Name + ":" + fmt.Sprintf("%v", call.Params)
+	}
+	return call.Name + ":" + string(raw)
+}
+
+type modelStreamCompleter interface {
+	StreamComplete(ctx context.Context, req model.Request, onChunk func(string) error) (*model.Response, error)
+}
+
+type modelReasoningStreamCompleter interface {
+	StreamCompleteWithReasoning(ctx context.Context, req model.Request, onChunk func(string) error, onReasoning func(string) error) (*model.Response, error)
+}
+
+func (a *Agent) completeModelStep(ctx context.Context, w http.ResponseWriter, run *store.Run, req model.Request) (*model.Response, bool, time.Duration, error) {
+	start := time.Now()
+	if streamingProvider, ok := a.provider.(modelReasoningStreamCompleter); ok {
+		streamedContent := false
+		resp, err := streamingProvider.StreamCompleteWithReasoning(ctx, req, func(chunk string) error {
+			streamedContent = true
+			return sse.Write(w, sse.Event{
+				Type: sse.EventRunAssistantDelta,
+				Data: sse.AssistantDeltaPayload{RunID: run.ID, Delta: chunk},
+			})
+		}, func(chunk string) error {
+			return sse.Write(w, sse.Event{
+				Type: sse.EventRunReasoningDelta,
+				Data: sse.ReasoningDeltaPayload{RunID: run.ID, Delta: chunk},
+			})
+		})
+		return resp, streamedContent, time.Since(start), err
+	}
+	streamingProvider, ok := a.provider.(modelStreamCompleter)
+	if !ok {
+		resp, err := a.provider.Complete(ctx, req)
+		return resp, false, time.Since(start), err
+	}
+	streamedContent := false
+	resp, err := streamingProvider.StreamComplete(ctx, req, func(chunk string) error {
+		streamedContent = true
+		return sse.Write(w, sse.Event{
+			Type: sse.EventRunAssistantDelta,
+			Data: sse.AssistantDeltaPayload{RunID: run.ID, Delta: chunk},
+		})
+	})
+	return resp, streamedContent, time.Since(start), err
+}
+
+func completionTokenCount(resp *model.Response) int {
+	if resp == nil {
+		return 0
+	}
+	if resp.Usage.CompletionTokens > 0 {
+		return resp.Usage.CompletionTokens
+	}
+	return 0
+}
+
+func setCompletionThroughput(run *store.Run, content string, completionTokens int, elapsed time.Duration) {
+	if run == nil || elapsed <= 0 {
+		return
+	}
+	if completionTokens <= 0 {
+		completionTokens = estimateCompletionTokens(content)
+	}
+	if completionTokens <= 0 {
+		return
+	}
+	run.CompletionElapsedMS = elapsed.Milliseconds()
+	run.CompletionTokensPerSecond = float64(completionTokens) / elapsed.Seconds()
+}
+
+func estimateCompletionTokens(content string) int {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return 0
+	}
+	return max(1, len([]rune(trimmed))/4)
+}
+
+func formatToolResult(result any) string {
+	if text, ok := result.(string); ok {
+		return text
+	}
+	encoded, err := json.Marshal(result)
+	if err == nil {
+		return string(encoded)
+	}
+	return fmt.Sprintf("%v", result)
 }
 
 // executeToolCall applies policy, handles approval gating, and then runs the

@@ -67,6 +67,9 @@ func (m *mockStore) ListSteps(_ context.Context, runID string) ([]*store.RunStep
 	}
 	return result, nil
 }
+func (m *mockStore) PatchScheduledJob(_ context.Context, _, _ string, _ store.ScheduledJobPatch) error {
+	return nil
+}
 
 type mockProvider struct {
 	callCount int
@@ -140,5 +143,5 @@ func (m *mockStore) ListThreadsForUser(_ context.Context, _ string, _ int) ([]st
 func (m *mockStore) GetThreadForUser(_ context.Context, _, _ string) ([]store.ThreadMessage, error) {
 	return nil, nil
 }
-func (m *mockStore) DeleteThreadForUser(_ context.Context, _, _ string) error { return nil }
+func (m *mockStore) DeleteThreadForUser(_ context.Context, _, _ string) error    { return nil }
 func (m *mockStore) RenameThreadForUser(_ context.Context, _, _, _ string) error { return nil }

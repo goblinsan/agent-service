@@ -113,3 +113,63 @@ func TestLoseItIngestSummaryUpdatesExistingPlan(t *testing.T) {
 		t.Fatalf("unexpected events %#v", fs.events)
 	}
 }
+
+func TestAppleHealthActivityAndNutritionStaySeparate(t *testing.T) {
+	fs := &fakePlanStore{
+		plans: []store.UserPlan{
+			{
+				ID:       "plan-health-1",
+				UserID:   "u1",
+				Title:    "Health goals",
+				Status:   "active",
+				Category: "health",
+				Connectors: []store.PlanConnector{{
+					App:    "apple-health",
+					Type:   "personal_data_app",
+					Domain: "health",
+				}},
+			},
+			{
+				ID:       "plan-nutrition-1",
+				UserID:   "u1",
+				Title:    "Nutrition goals",
+				Status:   "active",
+				Category: "nutrition",
+			},
+		},
+	}
+	tool := &PersonalDataIngestTool{
+		Store:         fs,
+		App:           "apple-health",
+		Domain:        "nutrition",
+		ToolName:      "apple_health_ingest_nutrition",
+		ToolDesc:      "test",
+		PlanTitle:     "Nutrition goals & intake",
+		DefaultSource: "Apple Health",
+		EventKind:     "nutrition_sync",
+	}
+	ctx := WithUserID(context.Background(), "u1")
+
+	_, err := tool.Execute(ctx, map[string]any{
+		"metrics": map[string]any{
+			"dietary_energy_kcal": 1900,
+			"protein_grams":       138,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fs.upserts) != 1 {
+		t.Fatalf("expected 1 upsert, got %d", len(fs.upserts))
+	}
+	plan := fs.upserts[0]
+	if plan.ID != "plan-nutrition-1" {
+		t.Fatalf("expected nutrition plan, got %q", plan.ID)
+	}
+	if len(plan.Connectors) != 1 || plan.Connectors[0].App != "apple-health" || plan.Connectors[0].Domain != "nutrition" {
+		t.Fatalf("unexpected connectors %#v", plan.Connectors)
+	}
+	if plan.Metrics["protein_grams"] != 138 {
+		t.Fatalf("expected nutrition metrics on nutrition plan, got %#v", plan.Metrics)
+	}
+}

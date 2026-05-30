@@ -61,6 +61,17 @@ func (p *Postgres) UpsertUserMemory(ctx context.Context, userID, key, value stri
 	return err
 }
 
+func (p *Postgres) DeleteUserMemory(ctx context.Context, userID, key string) error {
+	if userID == "" || key == "" {
+		return errors.New("user_id and key required")
+	}
+	_, err := p.db.ExecContext(ctx,
+		`DELETE FROM user_memories WHERE user_id = $1 AND key = $2`,
+		userID, key,
+	)
+	return err
+}
+
 func (p *Postgres) AppendUserEvent(ctx context.Context, evt *UserEvent) error {
 	if evt == nil || evt.UserID == "" {
 		return errors.New("user event requires user_id")

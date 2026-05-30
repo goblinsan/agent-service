@@ -23,8 +23,16 @@ func (s *Service) ListScheduledJobs(ctx context.Context, userID string, limit in
 	return s.store.ListScheduledJobs(ctx, userID, limit)
 }
 
+func (s *Service) ListScheduledJobHistory(ctx context.Context, userID string, limit int) ([]store.ScheduledJob, error) {
+	return s.store.ListScheduledJobHistory(ctx, userID, limit)
+}
+
 func (s *Service) DeleteScheduledJob(ctx context.Context, userID, jobID string) error {
 	return s.store.DeleteScheduledJob(ctx, userID, jobID)
+}
+
+func (s *Service) PatchScheduledJob(ctx context.Context, userID, jobID string, patch store.ScheduledJobPatch) error {
+	return s.store.PatchScheduledJob(ctx, userID, jobID, patch)
 }
 
 func (s *Service) ListNotifications(ctx context.Context, userID string, unreadOnly bool, limit int) ([]store.Notification, error) {

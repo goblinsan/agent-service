@@ -3,9 +3,16 @@ package registry
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/goblinsan/agent-service/internal/model"
+)
+
+var (
+	transientCapacityRetries = 15
+	transientCapacityDelay   = 2 * time.Second
 )
 
 // Pool is a model.Provider backed by a Registry.  On each request it picks the
@@ -36,34 +43,98 @@ func NewPool(reg *Registry, newNode func(url string) model.Provider) *Pool {
 
 // Complete implements model.Provider.
 func (p *Pool) Complete(ctx context.Context, req model.Request) (*model.Response, error) {
-	node := p.pickNode(req)
-	if node == nil {
-		return nil, fmt.Errorf("registry pool: no healthy node available for %s", routeDesc(req))
+	for attempt := 0; ; attempt++ {
+		node := p.pickNode(req)
+		if node == nil {
+			return nil, fmt.Errorf("registry pool: no healthy node available for %s", routeDesc(req))
+		}
+		prov := p.provider(node.URL)
+		resp, err := prov.Complete(ctx, req)
+		if err != nil {
+			if isTransientCapacityError(err) {
+				if attempt < transientCapacityRetries {
+					if waitForCapacityRetry(ctx) != nil {
+						return nil, err
+					}
+					continue
+				}
+			} else {
+				p.registry.MarkFailed(node.URL)
+			}
+			return nil, err
+		}
+		p.registry.MarkHealthy(node.URL)
+		return resp, nil
 	}
-	prov := p.provider(node.URL)
-	resp, err := prov.Complete(ctx, req)
-	if err != nil {
-		p.registry.MarkFailed(node.URL)
-		return nil, err
-	}
-	p.registry.MarkHealthy(node.URL)
-	return resp, nil
 }
 
 // Stream implements model.Provider.
 func (p *Pool) Stream(ctx context.Context, req model.Request, onChunk func(string) error) error {
-	node := p.pickNode(req)
-	if node == nil {
-		return fmt.Errorf("registry pool: no healthy node available for %s", routeDesc(req))
+	_, err := p.StreamComplete(ctx, req, onChunk)
+	return err
+}
+
+func (p *Pool) StreamComplete(ctx context.Context, req model.Request, onChunk func(string) error) (*model.Response, error) {
+	return p.StreamCompleteWithReasoning(ctx, req, onChunk, nil)
+}
+
+func (p *Pool) StreamCompleteWithReasoning(ctx context.Context, req model.Request, onChunk func(string) error, onReasoning func(string) error) (*model.Response, error) {
+	for attempt := 0; ; attempt++ {
+		node := p.pickNode(req)
+		if node == nil {
+			return nil, fmt.Errorf("registry pool: no healthy node available for %s", routeDesc(req))
+		}
+		prov := p.provider(node.URL)
+		resp, err := streamCompleteWithReasoning(ctx, prov, req, onChunk, onReasoning)
+		if err != nil {
+			if isTransientCapacityError(err) {
+				if attempt < transientCapacityRetries {
+					if waitForCapacityRetry(ctx) != nil {
+						return nil, err
+					}
+					continue
+				}
+			} else {
+				p.registry.MarkFailed(node.URL)
+			}
+			return nil, err
+		}
+		p.registry.MarkHealthy(node.URL)
+		return resp, nil
 	}
-	prov := p.provider(node.URL)
-	err := prov.Stream(ctx, req, onChunk)
+}
+
+type streamCompleter interface {
+	StreamComplete(ctx context.Context, req model.Request, onChunk func(string) error) (*model.Response, error)
+}
+
+type reasoningStreamCompleter interface {
+	StreamCompleteWithReasoning(ctx context.Context, req model.Request, onChunk func(string) error, onReasoning func(string) error) (*model.Response, error)
+}
+
+func streamComplete(ctx context.Context, prov model.Provider, req model.Request, onChunk func(string) error) (*model.Response, error) {
+	return streamCompleteWithReasoning(ctx, prov, req, onChunk, nil)
+}
+
+func streamCompleteWithReasoning(ctx context.Context, prov model.Provider, req model.Request, onChunk func(string) error, onReasoning func(string) error) (*model.Response, error) {
+	if streamingProvider, ok := prov.(reasoningStreamCompleter); ok {
+		return streamingProvider.StreamCompleteWithReasoning(ctx, req, onChunk, onReasoning)
+	}
+	if streamingProvider, ok := prov.(streamCompleter); ok {
+		return streamingProvider.StreamComplete(ctx, req, onChunk)
+	}
+	var content strings.Builder
+	err := prov.Stream(ctx, req, func(chunk string) error {
+		content.WriteString(chunk)
+		if onChunk == nil {
+			return nil
+		}
+		return onChunk(chunk)
+	})
 	if err != nil {
-		p.registry.MarkFailed(node.URL)
-		return err
+		return nil, err
 	}
-	p.registry.MarkHealthy(node.URL)
-	return nil
+	return &model.Response{Content: content.String(), FinishReason: "stop"}, nil
 }
 
 // pickNode returns the target node for req.  When req.BackendNode is set the
@@ -82,6 +153,25 @@ func routeDesc(req model.Request) string {
 		return fmt.Sprintf("node %q", req.BackendNode)
 	}
 	return fmt.Sprintf("model %q", req.Model)
+}
+
+func isTransientCapacityError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "status 429") || strings.Contains(message, "slot busy") || strings.Contains(message, "retry later")
+}
+
+func waitForCapacityRetry(ctx context.Context) error {
+	timer := time.NewTimer(transientCapacityDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // provider returns the cached provider for url, creating it on first access.

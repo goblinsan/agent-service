@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 
 	_ "github.com/lib/pq"
 
@@ -70,6 +72,7 @@ func main() {
 	default:
 		provider = &noopProvider{}
 	}
+	provider = endpointOverrideProvider{fallback: provider}
 
 	m := &metrics.Metrics{}
 
@@ -84,13 +87,19 @@ func main() {
 	if err := reg.Register(&tools.TimeNowTool{Location: localTZ}); err != nil {
 		slog.Warn("register time_now", "error", err)
 	}
+	if err := reg.Register(&tools.WeatherForecastTool{}); err != nil {
+		slog.Warn("register weather_forecast", "error", err)
+	}
 	if err := reg.Register(&tools.MemoryRecallTool{Store: pg}); err != nil {
 		slog.Warn("register memory_recall", "error", err)
 	}
 	if err := reg.Register(&tools.MemoryWriteTool{Store: pg}); err != nil {
 		slog.Warn("register memory_write", "error", err)
 	}
-	if err := reg.Register(&tools.PlanListTool{Store: pg}); err != nil {
+	if err := reg.Register(&tools.MemoryDeleteTool{Store: pg}); err != nil {
+		slog.Warn("register memory_delete", "error", err)
+	}
+	if err := reg.Register(&tools.PlanListTool{Store: pg, Location: localTZ}); err != nil {
 		slog.Warn("register plan_list", "error", err)
 	}
 	if err := reg.Register(&tools.PlanUpsertTool{Store: pg}); err != nil {
@@ -98,6 +107,36 @@ func main() {
 	}
 	if err := reg.Register(&tools.PlanIngestTextTool{Store: pg}); err != nil {
 		slog.Warn("register plan_ingest_text", "error", err)
+	}
+	if err := reg.Register(&tools.DailyRollupTool{Store: pg, Location: localTZ}); err != nil {
+		slog.Warn("register get_daily_rollup", "error", err)
+	}
+	if err := reg.Register(&tools.UnmappedRecordsTool{Store: pg, Location: localTZ}); err != nil {
+		slog.Warn("register get_unmapped_records", "error", err)
+	}
+	if err := reg.Register(&tools.PersonalDataIngestTool{
+		Store:         pg,
+		App:           "apple-health",
+		Domain:        "health",
+		ToolName:      "apple_health_ingest_activity",
+		ToolDesc:      "Ingest a normalized Apple Health activity summary into durable plan context and recent events so project-manager guidance reflects current exercise, recovery, and health progress.",
+		PlanTitle:     "Health goals & activity",
+		DefaultSource: "Apple Health",
+		EventKind:     "health_sync",
+	}); err != nil {
+		slog.Warn("register apple_health_ingest_activity", "error", err)
+	}
+	if err := reg.Register(&tools.PersonalDataIngestTool{
+		Store:         pg,
+		App:           "apple-health",
+		Domain:        "nutrition",
+		ToolName:      "apple_health_ingest_nutrition",
+		ToolDesc:      "Ingest a normalized Apple Health nutrition summary into durable plan context and recent events so project-manager guidance reflects current nutrition progress, including data written into Apple Health by apps such as Lose It.",
+		PlanTitle:     "Nutrition goals & intake",
+		DefaultSource: "Apple Health",
+		EventKind:     "nutrition_sync",
+	}); err != nil {
+		slog.Warn("register apple_health_ingest_nutrition", "error", err)
 	}
 	if err := reg.Register(&tools.PersonalDataIngestTool{
 		Store:         pg,
@@ -128,6 +167,9 @@ func main() {
 	}
 	if err := reg.Register(&tools.ScheduleListTool{Store: pg}); err != nil {
 		slog.Warn("register list_schedules", "error", err)
+	}
+	if err := reg.Register(&tools.ScheduleHistoryListTool{Store: pg}); err != nil {
+		slog.Warn("register list_schedule_history", "error", err)
 	}
 	if err := reg.Register(&tools.ProjectCheckinCreateTool{Store: pg}); err != nil {
 		slog.Warn("register create_project_checkin", "error", err)
@@ -185,6 +227,9 @@ func main() {
 	if automationModel != "" {
 		slog.Info("automation model default configured (deprecated; prefer AUTOMATION_NODE)", "model", automationModel)
 	}
+	if cfg.AgentCatalogPath != "" {
+		slog.Info("agent catalog configured", "path", cfg.AgentCatalogPath)
+	}
 
 	var svc *service.Service
 	if cfg.MCPEndpoint != "" {
@@ -200,6 +245,8 @@ func main() {
 			ChatModel:              chatModel,
 			AutomationModel:        automationModel,
 			NotificationDispatcher: notifier,
+			LocalTimezone:          localTZ,
+			AgentCatalogPath:       cfg.AgentCatalogPath,
 		})
 		slog.Info("MCP runner configured", "endpoint", cfg.MCPEndpoint)
 	} else {
@@ -212,6 +259,8 @@ func main() {
 			ChatModel:              chatModel,
 			AutomationModel:        automationModel,
 			NotificationDispatcher: notifier,
+			LocalTimezone:          localTZ,
+			AgentCatalogPath:       cfg.AgentCatalogPath,
 		})
 	}
 
@@ -289,6 +338,54 @@ func main() {
 		slog.Error("shutdown error", "error", err)
 	}
 	slog.Info("server stopped")
+}
+
+type endpointOverrideProvider struct {
+	fallback model.Provider
+}
+
+func (p endpointOverrideProvider) Complete(ctx context.Context, req model.Request) (*model.Response, error) {
+	if req.BackendBaseURL != "" {
+		return llama.NewWithAPIKey(req.BackendBaseURL, req.BackendAPIKey).Complete(ctx, req)
+	}
+	return p.fallback.Complete(ctx, req)
+}
+
+func (p endpointOverrideProvider) Stream(ctx context.Context, req model.Request, onChunk func(string) error) error {
+	_, err := p.StreamComplete(ctx, req, onChunk)
+	return err
+}
+
+func (p endpointOverrideProvider) StreamComplete(ctx context.Context, req model.Request, onChunk func(string) error) (*model.Response, error) {
+	return p.StreamCompleteWithReasoning(ctx, req, onChunk, nil)
+}
+
+func (p endpointOverrideProvider) StreamCompleteWithReasoning(ctx context.Context, req model.Request, onChunk func(string) error, onReasoning func(string) error) (*model.Response, error) {
+	if req.BackendBaseURL != "" {
+		return llama.NewWithAPIKey(req.BackendBaseURL, req.BackendAPIKey).StreamCompleteWithReasoning(ctx, req, onChunk, onReasoning)
+	}
+	if streamingProvider, ok := p.fallback.(interface {
+		StreamCompleteWithReasoning(context.Context, model.Request, func(string) error, func(string) error) (*model.Response, error)
+	}); ok {
+		return streamingProvider.StreamCompleteWithReasoning(ctx, req, onChunk, onReasoning)
+	}
+	if streamingProvider, ok := p.fallback.(interface {
+		StreamComplete(context.Context, model.Request, func(string) error) (*model.Response, error)
+	}); ok {
+		return streamingProvider.StreamComplete(ctx, req, onChunk)
+	}
+	var content strings.Builder
+	err := p.fallback.Stream(ctx, req, func(chunk string) error {
+		content.WriteString(chunk)
+		if onChunk == nil {
+			return nil
+		}
+		return onChunk(chunk)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &model.Response{Content: content.String(), FinishReason: "stop"}, nil
 }
 
 type noopProvider struct{}

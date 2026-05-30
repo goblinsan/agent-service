@@ -22,6 +22,9 @@ const (
 	EventRunApprovalRequested = "run.approval_requested"
 	// EventRunAssistantDelta fires for each streamed assistant output chunk.
 	EventRunAssistantDelta = "run.assistant_delta"
+	// EventRunReasoningDelta fires for each streamed model reasoning chunk when
+	// the provider exposes reasoning separately from assistant output.
+	EventRunReasoningDelta = "run.reasoning_delta"
 	// EventRunStep fires for each completed agent step.
 	EventRunStep = "run.step"
 	// EventRunPaused fires when a run is suspended pending an external decision.
@@ -58,6 +61,12 @@ type ApprovalRequestedPayload struct {
 
 // AssistantDeltaPayload is the data payload for a run.assistant_delta event.
 type AssistantDeltaPayload struct {
+	RunID string `json:"run_id"`
+	Delta string `json:"delta"`
+}
+
+// ReasoningDeltaPayload is the data payload for a run.reasoning_delta event.
+type ReasoningDeltaPayload struct {
 	RunID string `json:"run_id"`
 	Delta string `json:"delta"`
 }

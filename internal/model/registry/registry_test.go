@@ -266,11 +266,25 @@ func TestPool_CompleteMarksNodeFailedOnError(t *testing.T) {
 	reg := registry.New([]registry.NodeConfig{{Name: "n1", URL: "http://n1"}})
 	pool := registry.NewPool(reg, func(_ string) model.Provider { return stub })
 
-	_, err := pool.Complete(context.Background(), model.Request{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := pool.Complete(ctx, model.Request{})
 	require.Error(t, err)
 
 	// Node should now be unhealthy.
 	assert.Nil(t, reg.Pick("", 0, 0))
+}
+
+func TestPool_CompleteDoesNotMarkNodeFailedOnCapacityError(t *testing.T) {
+	stub := &stubProvider{url: "http://n1", err: errors.New("llama: unexpected status 429: inference slot busy, please retry later")}
+
+	reg := registry.New([]registry.NodeConfig{{Name: "n1", URL: "http://n1"}})
+	pool := registry.NewPool(reg, func(_ string) model.Provider { return stub })
+
+	_, err := pool.Complete(context.Background(), model.Request{})
+	require.Error(t, err)
+
+	assert.NotNil(t, reg.Pick("", 0, 0))
 }
 
 func TestPool_CompleteErrorsWhenNoHealthyNode(t *testing.T) {
@@ -303,9 +317,22 @@ func TestPool_StreamMarksNodeFailedOnError(t *testing.T) {
 	reg := registry.New([]registry.NodeConfig{{Name: "n1", URL: "http://n1"}})
 	pool := registry.NewPool(reg, func(_ string) model.Provider { return stub })
 
-	err := pool.Stream(context.Background(), model.Request{}, func(_ string) error { return nil })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := pool.Stream(ctx, model.Request{}, func(_ string) error { return nil })
 	require.Error(t, err)
 	assert.Nil(t, reg.Pick("", 0, 0))
+}
+
+func TestPool_StreamDoesNotMarkNodeFailedOnCapacityError(t *testing.T) {
+	stub := &stubProvider{url: "http://n1", err: errors.New("llama: unexpected status 429: inference slot busy, please retry later")}
+
+	reg := registry.New([]registry.NodeConfig{{Name: "n1", URL: "http://n1"}})
+	pool := registry.NewPool(reg, func(_ string) model.Provider { return stub })
+
+	err := pool.Stream(context.Background(), model.Request{}, func(_ string) error { return nil })
+	require.Error(t, err)
+	assert.NotNil(t, reg.Pick("", 0, 0))
 }
 
 func TestPool_StreamErrorsWhenNoHealthyNode(t *testing.T) {

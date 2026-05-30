@@ -81,6 +81,86 @@ func computePlanProgress(plan UserPlan) UserPlanProgress {
 	return progress
 }
 
+// PlanTodayActions returns plan cadence entries and open tasks that match the
+// weekday of localNow. It exists so callers can surface calendar-specific next
+// actions deterministically instead of asking the model to infer them from a
+// long task list.
+func PlanTodayActions(plan UserPlan, localNow time.Time) []string {
+	weekday := strings.ToLower(localNow.Weekday().String())
+	shortWeekday := strings.ToLower(localNow.Weekday().String()[:3])
+	out := make([]string, 0, 4)
+	seen := map[string]bool{}
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			return
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+
+	for _, entry := range plan.Cadence {
+		if strings.TrimSpace(entry.Activity) == "" {
+			continue
+		}
+		label := strings.ToLower(strings.TrimSpace(firstNonEmptyString(entry.Day, entry.Label)))
+		if label == weekday || label == shortWeekday {
+			add(entry.Activity)
+		}
+	}
+	for _, milestone := range plan.Milestones {
+		for _, task := range milestone.Tasks {
+			if taskDone(task.Status) {
+				continue
+			}
+			title := strings.TrimSpace(task.Title)
+			if title == "" {
+				continue
+			}
+			lowerTitle := strings.ToLower(title)
+			if strings.HasPrefix(lowerTitle, weekday+":") || strings.HasPrefix(lowerTitle, shortWeekday+":") {
+				add(title)
+			}
+		}
+	}
+	return out
+}
+
+// PlanNextOpenTasks returns the first open tasks in plan order. It is a generic
+// fallback when no task is tied to today's weekday.
+func PlanNextOpenTasks(plan UserPlan, limit int) []string {
+	if limit <= 0 {
+		limit = 3
+	}
+	out := make([]string, 0, limit)
+	for _, milestone := range plan.Milestones {
+		for _, task := range milestone.Tasks {
+			if taskDone(task.Status) || strings.TrimSpace(task.Title) == "" {
+				continue
+			}
+			out = append(out, task.Title)
+			if len(out) >= limit {
+				return out
+			}
+		}
+	}
+	if len(out) > 0 {
+		return out
+	}
+	for _, step := range plan.Steps {
+		status, _ := step["status"].(string)
+		title, _ := step["title"].(string)
+		if taskDone(status) || strings.TrimSpace(title) == "" {
+			continue
+		}
+		out = append(out, title)
+		if len(out) >= limit {
+			return out
+		}
+	}
+	return out
+}
+
 func nextReviewAt(cadence string, base time.Time) (time.Time, bool) {
 	cadence = strings.ToLower(strings.TrimSpace(cadence))
 	if cadence == "" {
@@ -101,6 +181,15 @@ func nextReviewAt(cadence string, base time.Time) (time.Time, bool) {
 	default:
 		return time.Time{}, false
 	}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func milestoneDone(m UserPlanMilestone) bool {

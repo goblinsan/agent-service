@@ -48,6 +48,12 @@ type Request struct {
 	// pools should prefer this over Model-based selection.  Single-node
 	// providers may ignore it.
 	BackendNode string
+	// BackendBaseURL, when non-empty, sends this request to a specific
+	// OpenAI-compatible endpoint instead of the default provider routing.
+	BackendBaseURL string
+	// BackendAPIKey is an optional bearer token for BackendBaseURL. It is
+	// transient request state and must not be logged or persisted.
+	BackendAPIKey string
 }
 
 // ToolSpec is the static advertisement of a callable function tool sent to the

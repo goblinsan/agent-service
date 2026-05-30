@@ -60,6 +60,56 @@ func (m *mockStore) DeleteUserPlan(_ context.Context, userID, planID string) err
 	return nil
 }
 
+func (m *mockStore) IngestSourceBatch(_ context.Context, batch *store.SourceBatch, records []store.SourceRecord, rejected []store.RejectedSourceRecord) (store.SourceBatchIngestResult, error) {
+	inserted := 0
+	updated := 0
+	for _, record := range records {
+		key := record.UserID + ":" + record.SourceSystem + ":" + record.DedupeKey
+		if _, exists := m.sourceRecords[key]; exists {
+			updated++
+		} else {
+			inserted++
+		}
+		m.sourceRecords[key] = record
+	}
+	m.rejectedRecords = append(m.rejectedRecords, rejected...)
+	status := batch.Status
+	if status == "" {
+		status = "accepted"
+	}
+	result := store.SourceBatchIngestResult{
+		BatchID:          batch.ID,
+		Status:           status,
+		Received:         batch.RecordCountReceived,
+		Inserted:         inserted,
+		Updated:          updated,
+		Rejected:         len(rejected),
+		ProcessingStatus: "queued",
+	}
+	m.sourceBatchResults = append(m.sourceBatchResults, result)
+	return result, nil
+}
+
+func (m *mockStore) ListSourceRecordsForBatch(_ context.Context, userID, batchID string) ([]store.SourceRecord, error) {
+	out := []store.SourceRecord{}
+	for _, record := range m.sourceRecords {
+		if record.UserID == userID && record.BatchID == batchID {
+			out = append(out, record)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockStore) UpsertProgressContributions(_ context.Context, contributions []store.ProgressContribution) error {
+	m.contributions = append(m.contributions, contributions...)
+	return nil
+}
+
+func (m *mockStore) UpsertDailyRollup(_ context.Context, rollup *store.DailyRollup) error {
+	m.rollups = append(m.rollups, rollup)
+	return nil
+}
+
 func (m *mockStore) CreateNotification(_ context.Context, _ *store.Notification) error { return nil }
 func (m *mockStore) ListNotifications(_ context.Context, _ string, _ bool, _ int) ([]store.Notification, error) {
 	return nil, nil
@@ -70,6 +120,9 @@ func (m *mockStore) DeleteNotification(_ context.Context, _, _ string) error    
 
 func (m *mockStore) CreateScheduledJob(_ context.Context, _ *store.ScheduledJob) error { return nil }
 func (m *mockStore) ListScheduledJobs(_ context.Context, _ string, _ int) ([]store.ScheduledJob, error) {
+	return nil, nil
+}
+func (m *mockStore) ListScheduledJobHistory(_ context.Context, _ string, _ int) ([]store.ScheduledJob, error) {
 	return nil, nil
 }
 func (m *mockStore) DeleteScheduledJob(_ context.Context, _, _ string) error { return nil }
