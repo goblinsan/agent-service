@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/goblinsan/agent-service/internal/store"
 	"gopkg.in/yaml.v3"
@@ -23,7 +25,9 @@ var (
 )
 
 type structuredPlanDocument struct {
+	ID                 string                        `yaml:"id,omitempty" json:"id,omitempty"`
 	Title              string                        `yaml:"title" json:"title"`
+	Status             string                        `yaml:"status,omitempty" json:"status,omitempty"`
 	Vision             string                        `yaml:"vision" json:"vision"`
 	Target             string                        `yaml:"target" json:"target"`
 	Summary            string                        `yaml:"summary" json:"summary"`
@@ -32,6 +36,7 @@ type structuredPlanDocument struct {
 	Principles         []string                      `yaml:"principles" json:"principles"`
 	Tags               []string                      `yaml:"tags" json:"tags"`
 	DataSources        []string                      `yaml:"data_sources" json:"data_sources"`
+	Connectors         []store.PlanConnector         `yaml:"connectors,omitempty" json:"connectors,omitempty"`
 	ReviewCadence      string                        `yaml:"review_cadence" json:"review_cadence"`
 	Metrics            map[string]any                `yaml:"metrics" json:"metrics"`
 	TrackedMetrics     []structuredTrackedMetric     `yaml:"tracked_metrics" json:"tracked_metrics"`
@@ -79,18 +84,21 @@ type structuredSupportingItem struct {
 }
 
 type structuredPlanMilestone struct {
-	ID      string               `yaml:"id" json:"id"`
-	Title   string               `yaml:"title" json:"title"`
-	Status  string               `yaml:"status" json:"status"`
-	Summary string               `yaml:"summary" json:"summary"`
-	Tasks   []structuredPlanTask `yaml:"tasks" json:"tasks"`
+	ID         string               `yaml:"id" json:"id"`
+	Title      string               `yaml:"title" json:"title"`
+	Status     string               `yaml:"status" json:"status"`
+	Summary    string               `yaml:"summary" json:"summary"`
+	TargetDate *time.Time           `yaml:"target_date,omitempty" json:"target_date,omitempty"`
+	Tasks      []structuredPlanTask `yaml:"tasks" json:"tasks"`
 }
 
 type structuredPlanTask struct {
-	ID     string `yaml:"id" json:"id"`
-	Title  string `yaml:"title" json:"title"`
-	Status string `yaml:"status" json:"status"`
-	Notes  string `yaml:"notes" json:"notes"`
+	ID          string     `yaml:"id" json:"id"`
+	Title       string     `yaml:"title" json:"title"`
+	Status      string     `yaml:"status" json:"status"`
+	Notes       string     `yaml:"notes" json:"notes"`
+	DueAt       *time.Time `yaml:"due_at,omitempty" json:"due_at,omitempty"`
+	CompletedAt *time.Time `yaml:"completed_at,omitempty" json:"completed_at,omitempty"`
 }
 
 // PlanIngestTextTool converts pasted plain-text or markdown plan documents into
@@ -224,6 +232,14 @@ func candidatePlanTitleForLookup(params map[string]any) string {
 	return derivePlanTitle(rawText)
 }
 
+func StructuredPlanDocumentID(raw string) string {
+	doc, ok, err := parseStructuredPlanDocument(raw)
+	if err != nil || !ok {
+		return ""
+	}
+	return strings.TrimSpace(doc.ID)
+}
+
 func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.UserPlan, bool, string, error) {
 	if strings.TrimSpace(userID) == "" {
 		return nil, false, "", errors.New("user id is required")
@@ -246,6 +262,7 @@ func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.Use
 
 	id, _ := params["id"].(string)
 	id = strings.TrimSpace(id)
+	providedID := id
 	created := false
 	if id == "" {
 		id = newIngestedPlanID()
@@ -254,9 +271,6 @@ func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.Use
 
 	status, _ := params["status"].(string)
 	status = strings.TrimSpace(status)
-	if status == "" {
-		status = "active"
-	}
 	category, _ := params["category"].(string)
 	category = strings.TrimSpace(category)
 	tags, err := normalizeStringList(params["tags"], "tags")
@@ -298,8 +312,15 @@ func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.Use
 	var steps []map[string]any
 	var milestones []store.UserPlanMilestone
 	if doc, ok, parseErr := parseStructuredPlanDocument(rawText); ok {
+		if providedID == "" && strings.TrimSpace(doc.ID) != "" {
+			id = strings.TrimSpace(doc.ID)
+			created = false
+		}
 		if strings.TrimSpace(doc.Title) != "" {
 			title = strings.TrimSpace(doc.Title)
+		}
+		if status == "" && strings.TrimSpace(doc.Status) != "" {
+			status = strings.TrimSpace(doc.Status)
 		}
 		if strings.TrimSpace(doc.Summary) != "" {
 			summary = strings.TrimSpace(doc.Summary)
@@ -313,6 +334,10 @@ func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.Use
 		if len(dataSources) == 0 && len(doc.DataSources) > 0 {
 			dataSources = doc.DataSources
 		}
+		if len(connectors) == 0 && len(doc.Connectors) > 0 {
+			connectors = doc.Connectors
+		}
+		dataSources = mergeDataSourcesWithConnectors(dataSources, connectors)
 		if reviewCadence == "" {
 			reviewCadence = strings.TrimSpace(doc.ReviewCadence)
 		}
@@ -347,6 +372,9 @@ func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.Use
 			Milestones:         milestones,
 			Steps:              steps,
 		}
+		if strings.TrimSpace(plan.Status) == "" {
+			plan.Status = "active"
+		}
 		return plan, created, source, nil
 	} else if expectsStructured {
 		if parseErr != nil {
@@ -376,6 +404,9 @@ func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.Use
 		Metrics:       metrics,
 		Milestones:    milestones,
 		Steps:         steps,
+	}
+	if strings.TrimSpace(plan.Status) == "" {
+		plan.Status = "active"
 	}
 	return plan, created, source, nil
 }
@@ -528,19 +559,220 @@ func structuredMilestonesToStore(input []structuredPlanMilestone) []store.UserPl
 				taskID = fmt.Sprintf("%s-t%d", id, j+1)
 			}
 			tasks = append(tasks, store.UserPlanTask{
-				ID:     taskID,
-				Title:  taskTitle,
-				Status: firstNonEmptyString(strings.TrimSpace(task.Status), "todo"),
-				Notes:  strings.TrimSpace(task.Notes),
+				ID:          taskID,
+				Title:       taskTitle,
+				Status:      firstNonEmptyString(strings.TrimSpace(task.Status), "todo"),
+				Notes:       strings.TrimSpace(task.Notes),
+				DueAt:       task.DueAt,
+				CompletedAt: task.CompletedAt,
 			})
 		}
 		out = append(out, store.UserPlanMilestone{
-			ID:      id,
-			Title:   title,
-			Status:  firstNonEmptyString(strings.TrimSpace(milestone.Status), "todo"),
-			Summary: strings.TrimSpace(milestone.Summary),
-			Tasks:   tasks,
+			ID:         id,
+			Title:      title,
+			Status:     firstNonEmptyString(strings.TrimSpace(milestone.Status), "todo"),
+			Summary:    strings.TrimSpace(milestone.Summary),
+			TargetDate: milestone.TargetDate,
+			Tasks:      tasks,
 		})
+	}
+	return out
+}
+
+func structuredDocumentFromPlan(plan store.UserPlan) structuredPlanDocument {
+	doc := structuredPlanDocument{
+		ID:                 strings.TrimSpace(plan.ID),
+		Title:              strings.TrimSpace(plan.Title),
+		Status:             strings.TrimSpace(plan.Status),
+		Vision:             strings.TrimSpace(plan.Vision),
+		Target:             strings.TrimSpace(plan.Target),
+		Summary:            strings.TrimSpace(plan.Summary),
+		Category:           strings.TrimSpace(plan.Category),
+		Objectives:         append([]string(nil), plan.Objectives...),
+		Principles:         append([]string(nil), plan.Principles...),
+		Tags:               append([]string(nil), plan.Tags...),
+		DataSources:        append([]string(nil), plan.DataSources...),
+		Connectors:         append([]store.PlanConnector(nil), plan.Connectors...),
+		ReviewCadence:      strings.TrimSpace(plan.ReviewCadence),
+		Metrics:            plan.Metrics,
+		TrackedMetrics:     structuredTrackedMetricsFromStore(plan.TrackedMetrics),
+		BaselineFacts:      structuredFactsFromStore(plan.BaselineFacts),
+		SuccessCriteria:    append([]string(nil), plan.SuccessCriteria...),
+		Cadence:            structuredCadenceFromStore(plan.Cadence),
+		SupportingSections: structuredSupportingSectionsFromStore(plan.SupportingSections),
+		Milestones:         structuredMilestonesFromStore(plan.Milestones),
+		Steps:              structuredStepsFromStore(plan.Steps),
+	}
+	if doc.Metrics == nil {
+		doc.Metrics = map[string]any{}
+	}
+	return doc
+}
+
+func RenderUserPlanDocument(plan store.UserPlan, format string) ([]byte, string, error) {
+	doc := structuredDocumentFromPlan(plan)
+	switch normalizePlanDocumentFormat(format) {
+	case "json":
+		raw, err := json.MarshalIndent(doc, "", "  ")
+		if err != nil {
+			return nil, "", err
+		}
+		return raw, "application/json; charset=utf-8", nil
+	case "yaml":
+		raw, err := yaml.Marshal(doc)
+		if err != nil {
+			return nil, "", err
+		}
+		return raw, "application/yaml; charset=utf-8", nil
+	default:
+		return nil, "", fmt.Errorf("unsupported plan export format %q", format)
+	}
+}
+
+func PlanDocumentFilename(plan store.UserPlan, format string) string {
+	format = normalizePlanDocumentFormat(format)
+	slug := slugifyPlanFilename(firstNonEmptyString(plan.Title, plan.ID, "plan"))
+	if strings.TrimSpace(plan.ID) != "" {
+		slug = fmt.Sprintf("%s-%s", slug, strings.TrimSpace(plan.ID))
+	}
+	return slug + "." + format
+}
+
+func normalizePlanDocumentFormat(format string) string {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "", "yaml", "yml":
+		return "yaml"
+	case "json":
+		return "json"
+	default:
+		return strings.ToLower(strings.TrimSpace(format))
+	}
+}
+
+func slugifyPlanFilename(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return "plan"
+	}
+	var b strings.Builder
+	lastHyphen := false
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastHyphen = false
+		default:
+			if !lastHyphen {
+				b.WriteByte('-')
+				lastHyphen = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "plan"
+	}
+	return out
+}
+
+func structuredTrackedMetricsFromStore(input []store.PlanTrackedMetric) []structuredTrackedMetric {
+	out := make([]structuredTrackedMetric, 0, len(input))
+	for _, metric := range input {
+		out = append(out, structuredTrackedMetric{
+			Name:     metric.Name,
+			Notes:    metric.Notes,
+			Source:   metric.Source,
+			Cadence:  metric.Cadence,
+			Baseline: metric.Baseline,
+			Target:   metric.Target,
+		})
+	}
+	return out
+}
+
+func structuredFactsFromStore(input []store.PlanFact) []structuredFact {
+	out := make([]structuredFact, 0, len(input))
+	for _, fact := range input {
+		out = append(out, structuredFact{
+			Label: fact.Label,
+			Value: fact.Value,
+		})
+	}
+	return out
+}
+
+func structuredCadenceFromStore(input []store.PlanCadenceEntry) []structuredCadenceEntry {
+	out := make([]structuredCadenceEntry, 0, len(input))
+	for _, entry := range input {
+		out = append(out, structuredCadenceEntry{
+			Label:    entry.Label,
+			Day:      entry.Day,
+			Activity: entry.Activity,
+			Notes:    entry.Notes,
+		})
+	}
+	return out
+}
+
+func structuredSupportingSectionsFromStore(input []store.PlanSupportingSection) []structuredSupportingSection {
+	out := make([]structuredSupportingSection, 0, len(input))
+	for _, section := range input {
+		items := make([]structuredSupportingItem, 0, len(section.Items))
+		for _, item := range section.Items {
+			items = append(items, structuredSupportingItem{
+				Label:   item.Label,
+				Kind:    item.Kind,
+				Content: item.Content,
+				URI:     item.URI,
+			})
+		}
+		out = append(out, structuredSupportingSection{
+			Title:   section.Title,
+			Kind:    section.Kind,
+			Summary: section.Summary,
+			Items:   items,
+		})
+	}
+	return out
+}
+
+func structuredMilestonesFromStore(input []store.UserPlanMilestone) []structuredPlanMilestone {
+	out := make([]structuredPlanMilestone, 0, len(input))
+	for _, milestone := range input {
+		tasks := make([]structuredPlanTask, 0, len(milestone.Tasks))
+		for _, task := range milestone.Tasks {
+			tasks = append(tasks, structuredPlanTask{
+				ID:          task.ID,
+				Title:       task.Title,
+				Status:      task.Status,
+				Notes:       task.Notes,
+				DueAt:       task.DueAt,
+				CompletedAt: task.CompletedAt,
+			})
+		}
+		out = append(out, structuredPlanMilestone{
+			ID:         milestone.ID,
+			Title:      milestone.Title,
+			Status:     milestone.Status,
+			Summary:    milestone.Summary,
+			TargetDate: milestone.TargetDate,
+			Tasks:      tasks,
+		})
+	}
+	return out
+}
+
+func structuredStepsFromStore(input []map[string]any) []any {
+	out := make([]any, 0, len(input))
+	for _, step := range input {
+		if step == nil {
+			continue
+		}
+		cloned := make(map[string]any, len(step))
+		for key, value := range step {
+			cloned[key] = value
+		}
+		out = append(out, cloned)
 	}
 	return out
 }

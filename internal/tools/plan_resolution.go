@@ -15,15 +15,14 @@ type activePlanLister interface {
 func ResolvePlanIdentityForWrite(ctx context.Context, planStore activePlanLister, userID, requestedID, title string) (string, bool, error) {
 	requestedID = strings.TrimSpace(requestedID)
 	if requestedID != "" {
-		if strings.TrimSpace(title) == "" {
-			return requestedID, false, nil
-		}
 		plans, err := planStore.ListActivePlans(ctx, userID)
 		if err != nil {
 			return "", false, fmt.Errorf("list plans for dedupe: %w", err)
 		}
-		if existing := bestPlanTitleMatch(plans, title); existing != nil {
-			return existing.ID, existing.ID != requestedID, nil
+		for _, plan := range plans {
+			if strings.TrimSpace(plan.ID) == requestedID {
+				return requestedID, false, nil
+			}
 		}
 		return requestedID, false, nil
 	}
