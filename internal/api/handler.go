@@ -117,6 +117,7 @@ func NewRouterWithOptions(svc *service.Service, opts RouterOptions) http.Handler
 	// Plan CRUD endpoints.
 	r.Get("/internal/plans", listPlansHandler(svc))
 	r.Get("/internal/plans/{id}", getPlanHandler(svc))
+	r.Get("/internal/plans/{id}/export", exportPlanHandler(svc))
 	r.Post("/internal/plans", upsertPlanHandler(svc))
 	r.Post("/internal/plans/import", importPlanHandler(svc))
 	r.Delete("/internal/plans/{id}", deletePlanHandler(svc))
@@ -1137,6 +1138,7 @@ func upsertPlanHandler(svc *service.Service) http.HandlerFunc {
 			Principles         []string                      `json:"principles"`
 			Tags               []string                      `json:"tags"`
 			DataSources        []string                      `json:"data_sources"`
+			Connectors         []store.PlanConnector         `json:"connectors"`
 			ReviewCadence      string                        `json:"review_cadence"`
 			Summary            string                        `json:"summary"`
 			Metrics            map[string]any                `json:"metrics"`
@@ -1179,6 +1181,7 @@ func upsertPlanHandler(svc *service.Service) http.HandlerFunc {
 			Principles:         req.Principles,
 			Tags:               req.Tags,
 			DataSources:        req.DataSources,
+			Connectors:         req.Connectors,
 			ReviewCadence:      strings.TrimSpace(req.ReviewCadence),
 			Summary:            strings.TrimSpace(req.Summary),
 			Metrics:            req.Metrics,
@@ -1255,18 +1258,20 @@ func importPlanHandler(svc *service.Service) http.HandlerFunc {
 			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 			return
 		}
-		if strings.TrimSpace(req.ID) == "" {
-			resolvedID, resolvedCreated, resolveErr := tools.ResolvePlanIdentityForWrite(r.Context(), svc, userID, "", plan.Title)
-			if resolveErr != nil {
-				slog.Error("resolve imported plan identity failed", "error", resolveErr, "user_id", userID, "title", plan.Title)
-				http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
-				return
-			}
-			if strings.TrimSpace(resolvedID) != "" {
-				plan.ID = strings.TrimSpace(resolvedID)
-			}
-			created = resolvedCreated
+		requestedID := strings.TrimSpace(req.ID)
+		if requestedID == "" {
+			requestedID = tools.StructuredPlanDocumentID(req.Text)
 		}
+		resolvedID, resolvedCreated, resolveErr := tools.ResolvePlanIdentityForWrite(r.Context(), svc, userID, requestedID, plan.Title)
+		if resolveErr != nil {
+			slog.Error("resolve imported plan identity failed", "error", resolveErr, "user_id", userID, "title", plan.Title)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		if strings.TrimSpace(resolvedID) != "" {
+			plan.ID = strings.TrimSpace(resolvedID)
+		}
+		created = resolvedCreated
 		if err := svc.UpsertUserPlan(r.Context(), plan); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				http.Error(w, `{"error":"plan not found"}`, http.StatusNotFound)
@@ -1291,6 +1296,48 @@ func importPlanHandler(svc *service.Service) http.HandlerFunc {
 			"plan":    plan,
 		}); err != nil {
 			slog.Error("failed to encode plan import response", "error", err)
+		}
+	}
+}
+
+func exportPlanHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		planID := strings.TrimSpace(chi.URLParam(r, "id"))
+		if planID == "" {
+			http.Error(w, `{"error":"plan id is required"}`, http.StatusBadRequest)
+			return
+		}
+		plan, err := svc.GetUserPlan(r.Context(), userID, planID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				http.Error(w, `{"error":"plan not found"}`, http.StatusNotFound)
+				return
+			}
+			if errors.Is(err, store.ErrForbidden) {
+				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+				return
+			}
+			slog.Error("get plan for export failed", "error", err, "user_id", userID, "plan_id", planID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		format := r.URL.Query().Get("format")
+		raw, contentType, err := tools.RenderUserPlanDocument(*plan, format)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+		filename := tools.PlanDocumentFilename(*plan, format)
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, filename))
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write(raw); err != nil {
+			slog.Error("failed to write exported plan document", "error", err, "user_id", userID, "plan_id", planID)
 		}
 	}
 }

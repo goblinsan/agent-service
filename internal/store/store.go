@@ -246,10 +246,10 @@ type UserPlanProgress struct {
 // PlanConnector describes an external personal-data app that contributes to a
 // durable plan (for example Apple Health, Strava, or Lose It).
 type PlanConnector struct {
-	App        string
-	Type       string
-	Domain     string
-	ExternalID string
+	App        string `json:"app" yaml:"app"`
+	Type       string `json:"type,omitempty" yaml:"type,omitempty"`
+	Domain     string `json:"domain,omitempty" yaml:"domain,omitempty"`
+	ExternalID string `json:"external_id,omitempty" yaml:"external_id,omitempty"`
 }
 
 // ThreadSummary is a compact description of a chat thread (session) belonging

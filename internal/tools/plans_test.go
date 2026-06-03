@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/goblinsan/agent-service/internal/store"
 )
@@ -492,5 +493,63 @@ func TestBuildUserPlanFromDocumentKeepsStructuredFieldsForValidYAML(t *testing.T
 	}
 	if len(plan.Milestones) != 1 || len(plan.Milestones[0].Tasks) != 1 {
 		t.Fatalf("unexpected milestones: %#v", plan.Milestones)
+	}
+}
+
+func TestBuildUserPlanFromDocumentPreservesStructuredIdentityConnectorsAndDates(t *testing.T) {
+	targetDate := "2026-07-01T00:00:00Z"
+	dueAt := "2026-06-10T09:00:00Z"
+	completedAt := "2026-06-11T10:00:00Z"
+
+	plan, _, _, err := BuildUserPlanFromDocument("u1", map[string]any{
+		"source": "launch-plan.yaml",
+		"text": "id: plan-launch\n" +
+			"title: Launch Plan\n" +
+			"status: paused\n" +
+			"connectors:\n" +
+			"  - app: github\n" +
+			"    type: repo\n" +
+			"    domain: work\n" +
+			"    external_id: goblinsan/agent-service\n" +
+			"milestones:\n" +
+			"  - id: milestone-1\n" +
+			"    title: Ship API\n" +
+			"    target_date: " + targetDate + "\n" +
+			"    tasks:\n" +
+			"      - id: task-1\n" +
+			"        title: Add export route\n" +
+			"        due_at: " + dueAt + "\n" +
+			"        completed_at: " + completedAt + "\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.ID != "plan-launch" {
+		t.Fatalf("expected imported id to round-trip, got %q", plan.ID)
+	}
+	if plan.Status != "paused" {
+		t.Fatalf("expected imported status, got %q", plan.Status)
+	}
+	if len(plan.Connectors) != 1 || plan.Connectors[0].ExternalID != "goblinsan/agent-service" {
+		t.Fatalf("unexpected connectors %#v", plan.Connectors)
+	}
+	if len(plan.Milestones) != 1 || plan.Milestones[0].TargetDate == nil {
+		t.Fatalf("expected milestone target date, got %#v", plan.Milestones)
+	}
+	if got := plan.Milestones[0].TargetDate.UTC().Format(time.RFC3339); got != targetDate {
+		t.Fatalf("unexpected target date %q", got)
+	}
+	if len(plan.Milestones[0].Tasks) != 1 {
+		t.Fatalf("expected one task, got %#v", plan.Milestones[0].Tasks)
+	}
+	task := plan.Milestones[0].Tasks[0]
+	if task.DueAt == nil || task.CompletedAt == nil {
+		t.Fatalf("expected task dates, got %#v", task)
+	}
+	if got := task.DueAt.UTC().Format(time.RFC3339); got != dueAt {
+		t.Fatalf("unexpected due_at %q", got)
+	}
+	if got := task.CompletedAt.UTC().Format(time.RFC3339); got != completedAt {
+		t.Fatalf("unexpected completed_at %q", got)
 	}
 }
