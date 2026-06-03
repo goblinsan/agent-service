@@ -194,11 +194,12 @@ func (t *PlanUpsertTool) Execute(ctx context.Context, params map[string]any) (an
 		return nil, errors.New("title is required")
 	}
 	id, _ := params["id"].(string)
-	id = strings.TrimSpace(id)
-	created := false
+	id, created, err := resolvePlanIdentity(ctx, t.Store, uid, id, title)
+	if err != nil {
+		return nil, err
+	}
 	if id == "" {
 		id = newPlanID()
-		created = true
 	}
 	status, _ := params["status"].(string)
 	status = strings.TrimSpace(status)

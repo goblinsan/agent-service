@@ -142,7 +142,20 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 	if uid == "" {
 		return nil, errors.New("no authenticated user on this run; cannot ingest plan")
 	}
-	plan, created, source, err := BuildUserPlanFromDocument(uid, params)
+	lookupParams := clonePlanParams(params)
+	requestedID, _ := lookupParams["id"].(string)
+	if strings.TrimSpace(requestedID) == "" {
+		if title := candidatePlanTitleForLookup(lookupParams); strings.TrimSpace(title) != "" {
+			resolvedID, created, err := resolvePlanIdentity(ctx, t.Store, uid, "", title)
+			if err != nil {
+				return nil, err
+			}
+			if !created && strings.TrimSpace(resolvedID) != "" {
+				lookupParams["id"] = resolvedID
+			}
+		}
+	}
+	plan, created, source, err := BuildUserPlanFromDocument(uid, lookupParams)
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +194,34 @@ func (t *PlanIngestTextTool) Execute(ctx context.Context, params map[string]any)
 			"source":              source,
 		},
 	}, nil
+}
+
+func clonePlanParams(params map[string]any) map[string]any {
+	cloned := make(map[string]any, len(params))
+	for key, value := range params {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func candidatePlanTitleForLookup(params map[string]any) string {
+	rawText, _ := params["text"].(string)
+	rawText = strings.TrimSpace(rawText)
+	explicitTitle, _ := params["title"].(string)
+	explicitTitle = strings.TrimSpace(explicitTitle)
+	source, _ := params["source"].(string)
+	source = strings.TrimSpace(source)
+
+	if doc, ok, _ := parseStructuredPlanDocument(rawText); ok && strings.TrimSpace(doc.Title) != "" {
+		return strings.TrimSpace(doc.Title)
+	}
+	if explicitTitle != "" && !expectsStructuredPlanDocument(explicitTitle) {
+		return explicitTitle
+	}
+	if source != "" && !expectsStructuredPlanDocument(source) && explicitTitle == "" {
+		return source
+	}
+	return derivePlanTitle(rawText)
 }
 
 func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.UserPlan, bool, string, error) {

@@ -1156,9 +1156,16 @@ func upsertPlanHandler(svc *service.Service) http.HandlerFunc {
 			http.Error(w, `{"error":"title is required"}`, http.StatusBadRequest)
 			return
 		}
-		created := strings.TrimSpace(req.ID) == ""
-		if created {
+		resolvedID, created, err := tools.ResolvePlanIdentityForWrite(r.Context(), svc, userID, req.ID, req.Title)
+		if err != nil {
+			slog.Error("resolve plan identity failed", "error", err, "user_id", userID, "title", req.Title)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		req.ID = strings.TrimSpace(resolvedID)
+		if req.ID == "" {
 			req.ID = newID()
+			created = true
 		}
 		plan := &store.UserPlan{
 			ID:                 strings.TrimSpace(req.ID),
@@ -1247,6 +1254,18 @@ func importPlanHandler(svc *service.Service) http.HandlerFunc {
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 			return
+		}
+		if strings.TrimSpace(req.ID) == "" {
+			resolvedID, resolvedCreated, resolveErr := tools.ResolvePlanIdentityForWrite(r.Context(), svc, userID, "", plan.Title)
+			if resolveErr != nil {
+				slog.Error("resolve imported plan identity failed", "error", resolveErr, "user_id", userID, "title", plan.Title)
+				http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+				return
+			}
+			if strings.TrimSpace(resolvedID) != "" {
+				plan.ID = strings.TrimSpace(resolvedID)
+			}
+			created = resolvedCreated
 		}
 		if err := svc.UpsertUserPlan(r.Context(), plan); err != nil {
 			if errors.Is(err, store.ErrNotFound) {

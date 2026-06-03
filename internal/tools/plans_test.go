@@ -105,6 +105,56 @@ func TestPlanUpsertCreatesNewWhenIDOmitted(t *testing.T) {
 	}
 }
 
+func TestPlanUpsertReusesExistingPlanWithSameTitle(t *testing.T) {
+	fs := &fakePlanStore{plans: []store.UserPlan{{
+		ID:     "plan-existing",
+		UserID: "u1",
+		Title:  "Train for tri",
+		Status: "active",
+	}}}
+	tool := &PlanUpsertTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+	res, err := tool.Execute(ctx, map[string]any{"title": "Train for tri"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.(map[string]any)["created"] != false {
+		t.Errorf("expected created=false, got %v", res.(map[string]any)["created"])
+	}
+	if got := fs.upserts[0].ID; got != "plan-existing" {
+		t.Fatalf("expected existing id, got %q", got)
+	}
+}
+
+func TestPlanUpsertPrefersRicherDuplicateByTitle(t *testing.T) {
+	fs := &fakePlanStore{plans: []store.UserPlan{
+		{
+			ID:     "plan-thin",
+			UserID: "u1",
+			Title:  "Train for tri",
+			Status: "active",
+		},
+		{
+			ID:         "plan-rich",
+			UserID:     "u1",
+			Title:      "Train for tri",
+			Status:     "active",
+			Vision:     "Finish strong.",
+			Objectives: []string{"Swim", "Bike", "Run"},
+			Milestones: []store.UserPlanMilestone{{ID: "m1", Title: "Week 1"}},
+		},
+	}}
+	tool := &PlanUpsertTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+	_, err := tool.Execute(ctx, map[string]any{"title": "Train for tri"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fs.upserts[0].ID; got != "plan-rich" {
+		t.Fatalf("expected richest plan id, got %q", got)
+	}
+}
+
 func TestPlanUpsertPersistsTypedMetadata(t *testing.T) {
 	fs := &fakePlanStore{}
 	tool := &PlanUpsertTool{Store: fs}
@@ -331,6 +381,32 @@ func TestPlanIngestTextUsesExistingIDWhenProvided(t *testing.T) {
 	}
 	if got := fs.upserts[0].ID; got != "plan-123" {
 		t.Errorf("expected plan id plan-123, got %q", got)
+	}
+}
+
+func TestPlanIngestTextReusesExistingPlanWithSameTitle(t *testing.T) {
+	fs := &fakePlanStore{plans: []store.UserPlan{{
+		ID:     "plan-existing",
+		UserID: "u1",
+		Title:  "Imported roadmap",
+		Status: "active",
+	}}}
+	tool := &PlanIngestTextTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+
+	res, err := tool.Execute(ctx, map[string]any{
+		"title": "Imported roadmap",
+		"text":  "Imported roadmap\n\n- Step one",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res.(map[string]any)["created"] != false {
+		t.Error("expected created=false when title already exists")
+	}
+	if got := fs.upserts[0].ID; got != "plan-existing" {
+		t.Errorf("expected plan id plan-existing, got %q", got)
 	}
 }
 
