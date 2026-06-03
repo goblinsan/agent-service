@@ -116,6 +116,9 @@ func (s *Service) RunScheduledJob(ctx context.Context, job store.ScheduledJob) (
 			"run_at":           job.RunAt.Format(time.RFC3339),
 		},
 	}
+	if strings.EqualFold(strings.TrimSpace(job.Kind), "project_checkin") {
+		req.Prompt = ensureProjectCheckinPrompt(req.Prompt)
+	}
 	if job.Payload != nil {
 		req.Context = job.Payload
 	}
@@ -132,6 +135,18 @@ func (s *Service) RunScheduledJob(ctx context.Context, job store.ScheduledJob) (
 		return nil, err
 	}
 	return &result, nil
+}
+
+func ensureProjectCheckinPrompt(prompt string) string {
+	trimmed := strings.TrimSpace(prompt)
+	if trimmed == "" {
+		return "Respond in English unless the user explicitly asked for another language."
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.Contains(lower, "respond in english") || strings.Contains(lower, "unless the user explicitly asked for another language") {
+		return trimmed
+	}
+	return trimmed + " Respond in English unless the user explicitly asked for another language."
 }
 
 func (s *Service) runReminderJob(ctx context.Context, job store.ScheduledJob) (*AutomationRunResult, error) {

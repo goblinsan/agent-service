@@ -84,9 +84,11 @@ func (w *Worker) runJob(ctx context.Context, job store.ScheduledJob) {
 		return
 	}
 
-	body := trimMessage(result.Output, 280)
+	fullBody := strings.TrimSpace(result.Output)
+	body := fullBody
 	if body == "" {
 		body = "Scheduled work completed."
+		fullBody = body
 	}
 	title := "Scheduled work completed"
 	if strings.EqualFold(strings.TrimSpace(job.Kind), "reminder") {
@@ -106,6 +108,8 @@ func (w *Worker) runJob(ctx context.Context, job store.ScheduledJob) {
 			"scheduled_job_id": job.ID,
 			"run_id":           result.RunID,
 			"status":           result.Status,
+			"full_body":        fullBody,
+			"preview_body":     trimMessage(fullBody, 280),
 		},
 		CreatedAt: now,
 	})
