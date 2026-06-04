@@ -1137,6 +1137,8 @@ type planningWorkspaceItem struct {
 	Date           time.Time  `json:"date"`
 	DateKind       string     `json:"date_kind"`
 	DateConfidence string     `json:"date_confidence"`
+	DependsOn      []string   `json:"depends_on,omitempty"`
+	Sequence       int        `json:"sequence,omitempty"`
 	CompletedAt    *time.Time `json:"completed_at,omitempty"`
 	IsCompleted    bool       `json:"is_completed"`
 	IsOverdue      bool       `json:"is_overdue"`
@@ -1174,10 +1176,21 @@ func buildPlanningWorkspaceView(plans []store.UserPlan, now time.Time) planningW
 		GeneratedAt: now,
 		Plans:       plans,
 		Timeline: planningWorkspaceTimeline{
-			AuthoritativeDateFields: []string{"milestones[].target_date", "milestones[].tasks[].due_at", "milestones[].tasks[].completed_at"},
-			OrderingSemantics:       "items are sorted by authoritative date; ties preserve canonical plan, milestone, and task order from the durable plan model",
-			HasHeuristicDates:       false,
-			Items:                   []planningWorkspaceItem{},
+			AuthoritativeDateFields: []string{
+				"milestones[].scheduled_date",
+				"milestones[].start_date",
+				"milestones[].target_date",
+				"milestones[].end_date",
+				"milestones[].tasks[].scheduled_at",
+				"milestones[].tasks[].start_at",
+				"milestones[].tasks[].target_at",
+				"milestones[].tasks[].due_at",
+				"milestones[].tasks[].end_at",
+				"milestones[].tasks[].completed_at",
+			},
+			OrderingSemantics: "items are sorted by authoritative date; ties preserve canonical plan, milestone, and task order from the durable plan model",
+			HasHeuristicDates: false,
+			Items:             []planningWorkspaceItem{},
 		},
 	}
 	summary := planningWorkspaceSummary{PlanCount: len(plans)}
@@ -1187,7 +1200,12 @@ func buildPlanningWorkspaceView(plans []store.UserPlan, now time.Time) planningW
 		summary.TaskCount += plan.Progress.TaskCount
 		summary.CompletedTasks += plan.Progress.CompletedTasks
 		for milestoneOrder, milestone := range plan.Milestones {
-			if milestone.TargetDate != nil {
+			milestoneDone := planningMilestoneDone(milestone)
+			appendMilestoneDate := func(date *time.Time, dateKind string, isDeadline bool) {
+				if date == nil {
+					return
+				}
+				isOverdue := isDeadline && !milestoneDone && date.Before(now)
 				view.Timeline.Items = append(view.Timeline.Items, planningWorkspaceItem{
 					Kind:           "milestone",
 					PlanID:         plan.ID,
@@ -1196,50 +1214,67 @@ func buildPlanningWorkspaceView(plans []store.UserPlan, now time.Time) planningW
 					MilestoneTitle: milestone.Title,
 					Title:          milestone.Title,
 					Status:         milestone.Status,
-					Date:           milestone.TargetDate.UTC(),
-					DateKind:       "target_date",
+					Date:           date.UTC(),
+					DateKind:       dateKind,
 					DateConfidence: "authoritative",
-					IsCompleted:    planningMilestoneDone(milestone),
-					IsOverdue:      !planningMilestoneDone(milestone) && milestone.TargetDate.Before(now),
-					PlanOrder:      planOrder,
-					MilestoneOrder: milestoneOrder,
-				})
-				summary.DatedItemCount++
-				if !planningMilestoneDone(milestone) && !milestone.TargetDate.Before(now) {
-					summary.UpcomingMilestoneCount++
-				}
-			}
-			for taskOrder, task := range milestone.Tasks {
-				if task.DueAt == nil {
-					continue
-				}
-				isCompleted := planningTaskDone(task)
-				isOverdue := !isCompleted && task.DueAt.Before(now)
-				view.Timeline.Items = append(view.Timeline.Items, planningWorkspaceItem{
-					Kind:           "task",
-					PlanID:         plan.ID,
-					PlanTitle:      plan.Title,
-					MilestoneID:    milestone.ID,
-					MilestoneTitle: milestone.Title,
-					TaskID:         task.ID,
-					Title:          task.Title,
-					Status:         task.Status,
-					Date:           task.DueAt.UTC(),
-					DateKind:       "due_at",
-					DateConfidence: "authoritative",
-					CompletedAt:    task.CompletedAt,
-					IsCompleted:    isCompleted,
+					DependsOn:      milestone.DependsOn,
+					Sequence:       milestone.Sequence,
+					IsCompleted:    milestoneDone,
 					IsOverdue:      isOverdue,
 					PlanOrder:      planOrder,
 					MilestoneOrder: milestoneOrder,
-					TaskOrder:      taskOrder,
 				})
 				summary.DatedItemCount++
-				if isOverdue {
-					summary.OverdueTaskCount++
-				} else if !isCompleted {
-					summary.UpcomingTaskCount++
+				if isDeadline && !milestoneDone && !date.Before(now) {
+					summary.UpcomingMilestoneCount++
 				}
+			}
+			appendMilestoneDate(milestone.ScheduledDate, "scheduled_date", false)
+			appendMilestoneDate(milestone.StartDate, "start_date", false)
+			appendMilestoneDate(milestone.TargetDate, "target_date", true)
+			appendMilestoneDate(milestone.EndDate, "end_date", true)
+			for taskOrder, task := range milestone.Tasks {
+				isCompleted := planningTaskDone(task)
+				appendTaskDate := func(date *time.Time, dateKind string, isDeadline bool) {
+					if date == nil {
+						return
+					}
+					isOverdue := isDeadline && !isCompleted && date.Before(now)
+					view.Timeline.Items = append(view.Timeline.Items, planningWorkspaceItem{
+						Kind:           "task",
+						PlanID:         plan.ID,
+						PlanTitle:      plan.Title,
+						MilestoneID:    milestone.ID,
+						MilestoneTitle: milestone.Title,
+						TaskID:         task.ID,
+						Title:          task.Title,
+						Status:         task.Status,
+						Date:           date.UTC(),
+						DateKind:       dateKind,
+						DateConfidence: "authoritative",
+						DependsOn:      task.DependsOn,
+						Sequence:       task.Sequence,
+						CompletedAt:    task.CompletedAt,
+						IsCompleted:    isCompleted,
+						IsOverdue:      isOverdue,
+						PlanOrder:      planOrder,
+						MilestoneOrder: milestoneOrder,
+						TaskOrder:      taskOrder,
+					})
+					summary.DatedItemCount++
+					if isDeadline {
+						if isOverdue {
+							summary.OverdueTaskCount++
+						} else if !isCompleted {
+							summary.UpcomingTaskCount++
+						}
+					}
+				}
+				appendTaskDate(task.ScheduledAt, "scheduled_at", false)
+				appendTaskDate(task.StartAt, "start_at", false)
+				appendTaskDate(task.TargetAt, "target_at", true)
+				appendTaskDate(task.DueAt, "due_at", true)
+				appendTaskDate(task.EndAt, "end_at", true)
 			}
 		}
 	}
