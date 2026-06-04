@@ -251,15 +251,15 @@ func TestPlanningWorkspaceEndpointReturnsCanonicalPlansAndDerivedTimeline(t *tes
 				Title string `json:"title"`
 			} `json:"plans"`
 			Summary struct {
-				PlanCount             int     `json:"plan_count"`
-				MilestoneCount        int     `json:"milestone_count"`
-				TaskCount             int     `json:"task_count"`
-				CompletedTasks        int     `json:"completed_tasks"`
-				PercentComplete       float64 `json:"percent_complete"`
-				DatedItemCount        int     `json:"dated_item_count"`
-				OverdueTaskCount      int     `json:"overdue_task_count"`
-				UpcomingTaskCount     int     `json:"upcoming_task_count"`
-				UpcomingMilestoneCount int    `json:"upcoming_milestone_count"`
+				PlanCount              int     `json:"plan_count"`
+				MilestoneCount         int     `json:"milestone_count"`
+				TaskCount              int     `json:"task_count"`
+				CompletedTasks         int     `json:"completed_tasks"`
+				PercentComplete        float64 `json:"percent_complete"`
+				DatedItemCount         int     `json:"dated_item_count"`
+				OverdueTaskCount       int     `json:"overdue_task_count"`
+				UpcomingTaskCount      int     `json:"upcoming_task_count"`
+				UpcomingMilestoneCount int     `json:"upcoming_milestone_count"`
 			} `json:"summary"`
 			Timeline struct {
 				AuthoritativeDateFields []string `json:"authoritative_date_fields"`

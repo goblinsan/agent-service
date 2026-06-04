@@ -1106,23 +1106,23 @@ type planningWorkspaceView struct {
 }
 
 type planningWorkspaceSummary struct {
-	PlanCount            int     `json:"plan_count"`
-	MilestoneCount       int     `json:"milestone_count"`
-	CompletedMilestones  int     `json:"completed_milestones"`
-	TaskCount            int     `json:"task_count"`
-	CompletedTasks       int     `json:"completed_tasks"`
-	PercentComplete      float64 `json:"percent_complete"`
-	DatedItemCount       int     `json:"dated_item_count"`
-	OverdueTaskCount     int     `json:"overdue_task_count"`
-	UpcomingTaskCount    int     `json:"upcoming_task_count"`
-	UpcomingMilestoneCount int   `json:"upcoming_milestone_count"`
+	PlanCount              int     `json:"plan_count"`
+	MilestoneCount         int     `json:"milestone_count"`
+	CompletedMilestones    int     `json:"completed_milestones"`
+	TaskCount              int     `json:"task_count"`
+	CompletedTasks         int     `json:"completed_tasks"`
+	PercentComplete        float64 `json:"percent_complete"`
+	DatedItemCount         int     `json:"dated_item_count"`
+	OverdueTaskCount       int     `json:"overdue_task_count"`
+	UpcomingTaskCount      int     `json:"upcoming_task_count"`
+	UpcomingMilestoneCount int     `json:"upcoming_milestone_count"`
 }
 
 type planningWorkspaceTimeline struct {
-	AuthoritativeDateFields []string                 `json:"authoritative_date_fields"`
-	OrderingSemantics       string                   `json:"ordering_semantics"`
-	HasHeuristicDates       bool                     `json:"has_heuristic_dates"`
-	Items                   []planningWorkspaceItem  `json:"items"`
+	AuthoritativeDateFields []string                `json:"authoritative_date_fields"`
+	OrderingSemantics       string                  `json:"ordering_semantics"`
+	HasHeuristicDates       bool                    `json:"has_heuristic_dates"`
+	Items                   []planningWorkspaceItem `json:"items"`
 }
 
 type planningWorkspaceItem struct {
