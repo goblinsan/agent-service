@@ -199,10 +199,10 @@ func TestPlanningWorkspaceEndpointReturnsCanonicalPlansAndDerivedTimeline(t *tes
 	svc := service.New(ms, &mockProvider{}, 10)
 	router := api.NewRouter(svc)
 
-	pastDue := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Second)
-	futureDue := time.Now().UTC().Add(48 * time.Hour).Truncate(time.Second)
-	futureTarget := time.Now().UTC().Add(72 * time.Hour).Truncate(time.Second)
-	completedAt := time.Now().UTC().Add(-12 * time.Hour).Truncate(time.Second)
+	pastDue := time.Date(2020, time.January, 2, 15, 4, 5, 0, time.UTC)
+	futureDue := time.Date(2100, time.January, 3, 15, 4, 5, 0, time.UTC)
+	futureTarget := time.Date(2100, time.January, 4, 15, 4, 5, 0, time.UTC)
+	completedAt := time.Date(2020, time.January, 1, 15, 4, 5, 0, time.UTC)
 
 	ms.plans["u1"] = map[string]store.UserPlan{
 		"plan-1": {
@@ -333,8 +333,8 @@ func TestPlanningWorkspaceEndpointTracksPlanCRUDState(t *testing.T) {
 	svc := service.New(ms, &mockProvider{}, 10)
 	router := api.NewRouter(svc)
 
-	dueAt := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
-	targetDate := time.Now().UTC().Add(72 * time.Hour).Format(time.RFC3339)
+	dueAt := time.Date(2100, time.January, 2, 15, 4, 5, 0, time.UTC).Format(time.RFC3339)
+	targetDate := time.Date(2100, time.January, 4, 15, 4, 5, 0, time.UTC).Format(time.RFC3339)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/internal/plans", bytes.NewBufferString(`{
 		"title":"Planning workspace launch",
