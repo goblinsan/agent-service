@@ -311,9 +311,6 @@ func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.Use
 	source, _ := params["source"].(string)
 	source = strings.TrimSpace(source)
 	expectsStructured := expectsStructuredPlanDocument(source) || expectsStructuredPlanDocument(title)
-	if source != "" && !expectsStructured && !containsString(dataSources, source) {
-		dataSources = append(dataSources, source)
-	}
 	dataSources = mergeDataSourcesWithConnectors(dataSources, connectors)
 	if category == "" {
 		category = inferCategoryFromConnectors(connectors)
@@ -393,6 +390,9 @@ func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.Use
 		}
 		return nil, false, "", fmt.Errorf("failed to parse structured plan document %q: missing required top-level fields such as title. Fix the YAML/JSON structure and try again", sourceOrTitle(source, title))
 	} else {
+		if source != "" && !containsString(dataSources, source) {
+			dataSources = append(dataSources, source)
+		}
 		milestones = derivePlanMilestones(rawText)
 		if len(milestones) > 0 {
 			steps = nil
