@@ -1305,7 +1305,8 @@ func buildPlanningWorkspaceView(plans []store.UserPlan, now time.Time) planningW
 }
 
 func planningMilestoneDone(milestone store.UserPlanMilestone) bool {
-	if strings.EqualFold(strings.TrimSpace(milestone.Status), "done") {
+	status := strings.ToLower(strings.TrimSpace(milestone.Status))
+	if status == "done" || status == "complete" {
 		return true
 	}
 	if len(milestone.Tasks) == 0 {
@@ -1320,7 +1321,11 @@ func planningMilestoneDone(milestone store.UserPlanMilestone) bool {
 }
 
 func planningTaskDone(task store.UserPlanTask) bool {
-	return strings.EqualFold(strings.TrimSpace(task.Status), "done")
+	if task.CompletedAt != nil {
+		return true
+	}
+	status := strings.ToLower(strings.TrimSpace(task.Status))
+	return status == "done" || status == "complete"
 }
 
 func getPlanHandler(svc *service.Service) http.HandlerFunc {
