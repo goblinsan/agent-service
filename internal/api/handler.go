@@ -1213,7 +1213,7 @@ func buildPlanningWorkspaceView(plans []store.UserPlan, now time.Time) planningW
 				if task.DueAt == nil {
 					continue
 				}
-				isCompleted := strings.EqualFold(strings.TrimSpace(task.Status), "done")
+				isCompleted := planningTaskDone(task)
 				isOverdue := !isCompleted && task.DueAt.Before(now)
 				view.Timeline.Items = append(view.Timeline.Items, planningWorkspaceItem{
 					Kind:           "task",
@@ -1250,7 +1250,20 @@ func buildPlanningWorkspaceView(plans []store.UserPlan, now time.Time) planningW
 		summary.PercentComplete = float64(summary.CompletedMilestones) / float64(summary.MilestoneCount) * 100
 	}
 	sort.SliceStable(view.Timeline.Items, func(i, j int) bool {
-		return view.Timeline.Items[i].Date.Before(view.Timeline.Items[j].Date)
+		left := view.Timeline.Items[i]
+		right := view.Timeline.Items[j]
+		switch {
+		case left.Date.Before(right.Date):
+			return true
+		case right.Date.Before(left.Date):
+			return false
+		case left.PlanOrder != right.PlanOrder:
+			return left.PlanOrder < right.PlanOrder
+		case left.MilestoneOrder != right.MilestoneOrder:
+			return left.MilestoneOrder < right.MilestoneOrder
+		default:
+			return left.TaskOrder < right.TaskOrder
+		}
 	})
 	view.Summary = summary
 	return view
@@ -1264,11 +1277,15 @@ func planningMilestoneDone(milestone store.UserPlanMilestone) bool {
 		return false
 	}
 	for _, task := range milestone.Tasks {
-		if !strings.EqualFold(strings.TrimSpace(task.Status), "done") {
+		if !planningTaskDone(task) {
 			return false
 		}
 	}
 	return true
+}
+
+func planningTaskDone(task store.UserPlanTask) bool {
+	return strings.EqualFold(strings.TrimSpace(task.Status), "done")
 }
 
 func getPlanHandler(svc *service.Service) http.HandlerFunc {

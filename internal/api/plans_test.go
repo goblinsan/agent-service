@@ -297,7 +297,7 @@ func TestPlanningWorkspaceEndpointReturnsCanonicalPlansAndDerivedTimeline(t *tes
 
 	assert.False(t, body.Workspace.Timeline.HasHeuristicDates)
 	assert.True(t, slices.Contains(body.Workspace.Timeline.AuthoritativeDateFields, "milestones[].target_date"))
-	assert.True(t, strings.Contains(body.Workspace.Timeline.OrderingSemantics, "durable plan model"))
+	assert.Equal(t, "items are sorted by authoritative date; ties preserve canonical plan, milestone, and task order from the durable plan model", body.Workspace.Timeline.OrderingSemantics)
 	require.Len(t, body.Workspace.Timeline.Items, 3)
 
 	var overdueTaskFound, completedTaskFound, milestoneFound bool
