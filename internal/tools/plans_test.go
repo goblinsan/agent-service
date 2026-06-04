@@ -570,6 +570,27 @@ func TestBuildUserPlanFromDocumentKeepsStructuredFieldsForValidYAML(t *testing.T
 	}
 }
 
+func TestBuildUserPlanFromDocumentDoesNotOverwriteStructuredDataSourcesWithImportSource(t *testing.T) {
+	plan, _, _, err := BuildUserPlanFromDocument("u1", map[string]any{
+		"title":  "endurance.yaml",
+		"source": "restoration",
+		"text": "title: Endurance Plan\n" +
+			"data_sources:\n" +
+			"  - healthfit\n" +
+			"  - loseit\n" +
+			"milestones:\n" +
+			"  - title: Week 1\n" +
+			"    tasks:\n" +
+			"      - title: \"Monday: 3 easy miles\"\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.DataSources) != 2 || plan.DataSources[0] != "healthfit" || plan.DataSources[1] != "loseit" {
+		t.Fatalf("unexpected data sources %#v", plan.DataSources)
+	}
+}
+
 func TestBuildUserPlanFromDocumentPreservesStructuredIdentityConnectorsAndDates(t *testing.T) {
 	scheduledDate := "2026-06-01T00:00:00Z"
 	startDate := "2026-06-02T00:00:00Z"

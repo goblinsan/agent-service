@@ -311,7 +311,7 @@ func BuildUserPlanFromDocument(userID string, params map[string]any) (*store.Use
 	source, _ := params["source"].(string)
 	source = strings.TrimSpace(source)
 	expectsStructured := expectsStructuredPlanDocument(source) || expectsStructuredPlanDocument(title)
-	if source != "" && !containsString(dataSources, source) {
+	if source != "" && !expectsStructured && !containsString(dataSources, source) {
 		dataSources = append(dataSources, source)
 	}
 	dataSources = mergeDataSourcesWithConnectors(dataSources, connectors)
