@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -266,6 +267,79 @@ func TestPlanUpsertPersistsMilestonesAndRollup(t *testing.T) {
 	}
 }
 
+func TestPlanUpsertParsesSchedulingSemantics(t *testing.T) {
+	fs := &fakePlanStore{}
+	tool := &PlanUpsertTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+	scheduledDate := "2026-06-01T09:00:00Z"
+	startDate := "2026-06-02T09:00:00Z"
+	targetDate := "2026-07-01T00:00:00Z"
+	endDate := "2026-07-05T00:00:00Z"
+	scheduledAt := "2026-06-03T09:00:00Z"
+	startAt := "2026-06-04T09:00:00Z"
+	targetAt := "2026-06-20T09:00:00Z"
+	dueAt := "2026-06-21T09:00:00Z"
+	taskEndAt := "2026-06-22T09:00:00Z"
+	_, err := tool.Execute(ctx, map[string]any{
+		"title": "Scheduling Plan",
+		"milestones": []any{
+			map[string]any{
+				"id":             "m1",
+				"title":          "Milestone 1",
+				"scheduled_date": scheduledDate,
+				"start_date":     startDate,
+				"target_date":    targetDate,
+				"end_date":       endDate,
+				"depends_on":     []any{"m0"},
+				"sequence":       float64(2),
+				"tasks": []any{
+					map[string]any{
+						"id":           "t1",
+						"title":        "Task 1",
+						"scheduled_at": scheduledAt,
+						"start_at":     startAt,
+						"target_at":    targetAt,
+						"due_at":       dueAt,
+						"end_at":       taskEndAt,
+						"depends_on":   []any{"t0"},
+						"sequence":     float64(3),
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := fs.upserts[0]
+	if len(plan.Milestones) != 1 {
+		t.Fatalf("expected one milestone, got %#v", plan.Milestones)
+	}
+	m := plan.Milestones[0]
+	if m.ScheduledDate == nil || m.StartDate == nil || m.TargetDate == nil || m.EndDate == nil {
+		t.Fatalf("expected milestone dates, got %#v", m)
+	}
+	if !reflect.DeepEqual(m.DependsOn, []string{"m0"}) {
+		t.Fatalf("unexpected milestone depends_on %#v", m.DependsOn)
+	}
+	if m.Sequence != 2 {
+		t.Fatalf("unexpected milestone sequence %d", m.Sequence)
+	}
+	if len(m.Tasks) != 1 {
+		t.Fatalf("expected one task, got %#v", m.Tasks)
+	}
+	task := m.Tasks[0]
+	if task.ScheduledAt == nil || task.StartAt == nil || task.TargetAt == nil || task.DueAt == nil || task.EndAt == nil {
+		t.Fatalf("expected task dates, got %#v", task)
+	}
+	if !reflect.DeepEqual(task.DependsOn, []string{"t0"}) {
+		t.Fatalf("unexpected task depends_on %#v", task.DependsOn)
+	}
+	if task.Sequence != 3 {
+		t.Fatalf("unexpected task sequence %d", task.Sequence)
+	}
+}
+
 func TestPlanUpsertRequiresTitle(t *testing.T) {
 	tool := &PlanUpsertTool{Store: &fakePlanStore{}}
 	ctx := WithUserID(context.Background(), "u1")
@@ -497,8 +571,15 @@ func TestBuildUserPlanFromDocumentKeepsStructuredFieldsForValidYAML(t *testing.T
 }
 
 func TestBuildUserPlanFromDocumentPreservesStructuredIdentityConnectorsAndDates(t *testing.T) {
+	scheduledDate := "2026-06-01T00:00:00Z"
+	startDate := "2026-06-02T00:00:00Z"
 	targetDate := "2026-07-01T00:00:00Z"
+	endDate := "2026-07-10T00:00:00Z"
+	scheduledAt := "2026-06-05T09:00:00Z"
+	startAt := "2026-06-06T09:00:00Z"
+	targetAt := "2026-06-09T09:00:00Z"
 	dueAt := "2026-06-10T09:00:00Z"
+	endAt := "2026-06-12T09:00:00Z"
 	completedAt := "2026-06-11T10:00:00Z"
 
 	plan, _, _, err := BuildUserPlanFromDocument("u1", map[string]any{
@@ -514,11 +595,24 @@ func TestBuildUserPlanFromDocumentPreservesStructuredIdentityConnectorsAndDates(
 			"milestones:\n" +
 			"  - id: milestone-1\n" +
 			"    title: Ship API\n" +
+			"    scheduled_date: " + scheduledDate + "\n" +
+			"    start_date: " + startDate + "\n" +
 			"    target_date: " + targetDate + "\n" +
+			"    end_date: " + endDate + "\n" +
+			"    depends_on:\n" +
+			"      - milestone-0\n" +
+			"    sequence: 2\n" +
 			"    tasks:\n" +
 			"      - id: task-1\n" +
 			"        title: Add export route\n" +
+			"        scheduled_at: " + scheduledAt + "\n" +
+			"        start_at: " + startAt + "\n" +
+			"        target_at: " + targetAt + "\n" +
 			"        due_at: " + dueAt + "\n" +
+			"        end_at: " + endAt + "\n" +
+			"        depends_on:\n" +
+			"          - task-0\n" +
+			"        sequence: 3\n" +
 			"        completed_at: " + completedAt + "\n",
 	})
 	if err != nil {
@@ -539,6 +633,21 @@ func TestBuildUserPlanFromDocumentPreservesStructuredIdentityConnectorsAndDates(
 	if got := plan.Milestones[0].TargetDate.UTC().Format(time.RFC3339); got != targetDate {
 		t.Fatalf("unexpected target date %q", got)
 	}
+	if got := plan.Milestones[0].ScheduledDate.UTC().Format(time.RFC3339); got != scheduledDate {
+		t.Fatalf("unexpected scheduled_date %q", got)
+	}
+	if got := plan.Milestones[0].StartDate.UTC().Format(time.RFC3339); got != startDate {
+		t.Fatalf("unexpected start_date %q", got)
+	}
+	if got := plan.Milestones[0].EndDate.UTC().Format(time.RFC3339); got != endDate {
+		t.Fatalf("unexpected end_date %q", got)
+	}
+	if !reflect.DeepEqual(plan.Milestones[0].DependsOn, []string{"milestone-0"}) {
+		t.Fatalf("unexpected milestone depends_on %#v", plan.Milestones[0].DependsOn)
+	}
+	if plan.Milestones[0].Sequence != 2 {
+		t.Fatalf("unexpected milestone sequence %d", plan.Milestones[0].Sequence)
+	}
 	if len(plan.Milestones[0].Tasks) != 1 {
 		t.Fatalf("expected one task, got %#v", plan.Milestones[0].Tasks)
 	}
@@ -548,6 +657,24 @@ func TestBuildUserPlanFromDocumentPreservesStructuredIdentityConnectorsAndDates(
 	}
 	if got := task.DueAt.UTC().Format(time.RFC3339); got != dueAt {
 		t.Fatalf("unexpected due_at %q", got)
+	}
+	if got := task.ScheduledAt.UTC().Format(time.RFC3339); got != scheduledAt {
+		t.Fatalf("unexpected scheduled_at %q", got)
+	}
+	if got := task.StartAt.UTC().Format(time.RFC3339); got != startAt {
+		t.Fatalf("unexpected start_at %q", got)
+	}
+	if got := task.TargetAt.UTC().Format(time.RFC3339); got != targetAt {
+		t.Fatalf("unexpected target_at %q", got)
+	}
+	if got := task.EndAt.UTC().Format(time.RFC3339); got != endAt {
+		t.Fatalf("unexpected end_at %q", got)
+	}
+	if !reflect.DeepEqual(task.DependsOn, []string{"task-0"}) {
+		t.Fatalf("unexpected task depends_on %#v", task.DependsOn)
+	}
+	if task.Sequence != 3 {
+		t.Fatalf("unexpected task sequence %d", task.Sequence)
 	}
 	if got := task.CompletedAt.UTC().Format(time.RFC3339); got != completedAt {
 		t.Fatalf("unexpected completed_at %q", got)

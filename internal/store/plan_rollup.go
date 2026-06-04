@@ -41,6 +41,12 @@ func NormalizeUserPlan(plan *UserPlan) {
 	if len(plan.Steps) == 0 && len(plan.Milestones) > 0 {
 		plan.Steps = milestonesToSteps(plan.Milestones)
 	}
+	for i := range plan.Milestones {
+		plan.Milestones[i].DependsOn = normalizeStringSlice(plan.Milestones[i].DependsOn)
+		for j := range plan.Milestones[i].Tasks {
+			plan.Milestones[i].Tasks[j].DependsOn = normalizeStringSlice(plan.Milestones[i].Tasks[j].DependsOn)
+		}
+	}
 	plan.Progress = computePlanProgress(*plan)
 }
 
@@ -254,4 +260,24 @@ func normalizePlanStatus(status, fallback string) string {
 	default:
 		return fallback
 	}
+}
+
+func normalizeStringSlice(input []string) []string {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(input))
+	seen := map[string]bool{}
+	for _, item := range input {
+		item = strings.TrimSpace(item)
+		if item == "" || seen[item] {
+			continue
+		}
+		seen[item] = true
+		out = append(out, item)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

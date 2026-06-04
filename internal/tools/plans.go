@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,10 +63,16 @@ func summarizePlanForTool(p store.UserPlan, localNow time.Time) map[string]any {
 			break
 		}
 		entry := map[string]any{
-			"id":      milestone.ID,
-			"title":   milestone.Title,
-			"status":  milestone.Status,
-			"summary": milestone.Summary,
+			"id":             milestone.ID,
+			"title":          milestone.Title,
+			"status":         milestone.Status,
+			"summary":        milestone.Summary,
+			"scheduled_date": milestone.ScheduledDate,
+			"start_date":     milestone.StartDate,
+			"target_date":    milestone.TargetDate,
+			"end_date":       milestone.EndDate,
+			"depends_on":     milestone.DependsOn,
+			"sequence":       milestone.Sequence,
 		}
 		taskCount := len(milestone.Tasks)
 		if taskCount > 0 && taskCount <= 12 {
@@ -75,10 +82,18 @@ func summarizePlanForTool(p store.UserPlan, localNow time.Time) map[string]any {
 					break
 				}
 				tasks = append(tasks, map[string]any{
-					"id":     task.ID,
-					"title":  task.Title,
-					"status": task.Status,
-					"notes":  task.Notes,
+					"id":           task.ID,
+					"title":        task.Title,
+					"status":       task.Status,
+					"notes":        task.Notes,
+					"scheduled_at": task.ScheduledAt,
+					"start_at":     task.StartAt,
+					"target_at":    task.TargetAt,
+					"due_at":       task.DueAt,
+					"end_at":       task.EndAt,
+					"completed_at": task.CompletedAt,
+					"depends_on":   task.DependsOn,
+					"sequence":     task.Sequence,
 				})
 			}
 			entry["tasks"] = tasks
@@ -174,7 +189,7 @@ func (t *PlanUpsertTool) Definition() Tool {
 			{Name: "review_cadence", Type: "string", Description: "Optional human-readable review cadence such as daily, weekday-morning, weekly, or quarterly.", Required: false},
 			{Name: "summary", Type: "string", Description: "One- or two-sentence description of the goal and why it matters.", Required: false},
 			{Name: "metrics", Type: "object", Description: "Optional structured metrics map, for example {\"target_workouts_per_week\":4,\"weekly_budget_usd\":500}.", Required: false},
-			{Name: "milestones", Type: "array", Description: "Optional ordered milestone objects. Each milestone is {\"id\":\"...\",\"title\":\"...\",\"status\":\"todo|doing|done|blocked\",\"summary\":\"...\",\"target_date\":\"RFC3339(optional)\",\"tasks\":[{\"id\":\"...\",\"title\":\"...\",\"status\":\"todo|doing|done|blocked\",\"notes\":\"...\",\"due_at\":\"RFC3339(optional)\"}]}.", Required: false},
+			{Name: "milestones", Type: "array", Description: "Optional ordered milestone objects. Milestones support explicit scheduling fields: scheduled_date/start_date/target_date/end_date (RFC3339), optional depends_on ids, optional sequence, and tasks. Tasks support scheduled_at/start_at/target_at/due_at/end_at/completed_at (RFC3339), optional depends_on ids, and optional sequence.", Required: false},
 			{Name: "steps", Type: "array", Description: "Ordered list of step objects. Each step is an object like {\"title\":\"...\",\"status\":\"todo|doing|done\",\"notes\":\"...\"}. Pass the full revised list when updating.", Required: false},
 		},
 	}
@@ -507,6 +522,25 @@ func normalizePlanMilestones(v any) ([]store.UserPlanMilestone, error) {
 		if targetDate, ok := parseOptionalRFC3339(asString(obj["target_date"])); ok {
 			m.TargetDate = &targetDate
 		}
+		if scheduledDate, ok := parseOptionalRFC3339(asString(obj["scheduled_date"])); ok {
+			m.ScheduledDate = &scheduledDate
+		}
+		if startDate, ok := parseOptionalRFC3339(asString(obj["start_date"])); ok {
+			m.StartDate = &startDate
+		}
+		if endDate, ok := parseOptionalRFC3339(asString(obj["end_date"])); ok {
+			m.EndDate = &endDate
+		}
+		if dependsOn, err := normalizeIDList(obj["depends_on"], fmt.Sprintf("milestones[%d].depends_on", i)); err != nil {
+			return nil, err
+		} else {
+			m.DependsOn = dependsOn
+		}
+		if sequence, ok, err := parseOptionalInt(obj["sequence"], fmt.Sprintf("milestones[%d].sequence", i)); err != nil {
+			return nil, err
+		} else if ok {
+			m.Sequence = sequence
+		}
 		tasks, err := normalizePlanTasks(obj["tasks"], i)
 		if err != nil {
 			return nil, err
@@ -544,8 +578,30 @@ func normalizePlanTasks(v any, milestoneIndex int) ([]store.UserPlanTask, error)
 		if dueAt, ok := parseOptionalRFC3339(asString(obj["due_at"])); ok {
 			task.DueAt = &dueAt
 		}
+		if scheduledAt, ok := parseOptionalRFC3339(asString(obj["scheduled_at"])); ok {
+			task.ScheduledAt = &scheduledAt
+		}
+		if startAt, ok := parseOptionalRFC3339(asString(obj["start_at"])); ok {
+			task.StartAt = &startAt
+		}
+		if targetAt, ok := parseOptionalRFC3339(asString(obj["target_at"])); ok {
+			task.TargetAt = &targetAt
+		}
+		if endAt, ok := parseOptionalRFC3339(asString(obj["end_at"])); ok {
+			task.EndAt = &endAt
+		}
 		if completedAt, ok := parseOptionalRFC3339(asString(obj["completed_at"])); ok {
 			task.CompletedAt = &completedAt
+		}
+		if dependsOn, err := normalizeIDList(obj["depends_on"], fmt.Sprintf("milestones[%d].tasks[%d].depends_on", milestoneIndex, i)); err != nil {
+			return nil, err
+		} else {
+			task.DependsOn = dependsOn
+		}
+		if sequence, ok, err := parseOptionalInt(obj["sequence"], fmt.Sprintf("milestones[%d].tasks[%d].sequence", milestoneIndex, i)); err != nil {
+			return nil, err
+		} else if ok {
+			task.Sequence = sequence
 		}
 		out = append(out, task)
 	}
@@ -567,6 +623,66 @@ func parseOptionalRFC3339(value string) (time.Time, bool) {
 func asString(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+func normalizeIDList(v any, field string) ([]string, error) {
+	if v == nil {
+		return nil, nil
+	}
+	values, err := normalizeStringList(v, field)
+	if err != nil {
+		return nil, err
+	}
+	if len(values) == 0 {
+		return nil, nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out, nil
+}
+
+func parseOptionalInt(v any, field string) (int, bool, error) {
+	if v == nil {
+		return 0, false, nil
+	}
+	switch typed := v.(type) {
+	case float64:
+		if typed != float64(int(typed)) {
+			return 0, false, fmt.Errorf("%s must be an integer", field)
+		}
+		return int(typed), true, nil
+	case int:
+		return typed, true, nil
+	case int32:
+		return int(typed), true, nil
+	case int64:
+		return int(typed), true, nil
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err != nil {
+			return 0, false, fmt.Errorf("%s must be an integer", field)
+		}
+		return int(parsed), true, nil
+	case string:
+		typed = strings.TrimSpace(typed)
+		if typed == "" {
+			return 0, false, nil
+		}
+		parsed, err := strconv.Atoi(typed)
+		if err != nil {
+			return 0, false, fmt.Errorf("%s must be an integer", field)
+		}
+		return parsed, true, nil
+	default:
+		return 0, false, fmt.Errorf("%s must be an integer", field)
+	}
 }
 
 func normalizePlanState(status, fallback string) string {

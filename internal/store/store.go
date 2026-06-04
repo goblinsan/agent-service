@@ -216,12 +216,17 @@ type PlanSupportingItem struct {
 }
 
 type UserPlanMilestone struct {
-	ID         string         `json:"id"`
-	Title      string         `json:"title"`
-	Status     string         `json:"status"`
-	Summary    string         `json:"summary"`
-	TargetDate *time.Time     `json:"target_date,omitempty"`
-	Tasks      []UserPlanTask `json:"tasks"`
+	ID            string         `json:"id"`
+	Title         string         `json:"title"`
+	Status        string         `json:"status"`
+	Summary       string         `json:"summary"`
+	ScheduledDate *time.Time     `json:"scheduled_date,omitempty"`
+	StartDate     *time.Time     `json:"start_date,omitempty"`
+	TargetDate    *time.Time     `json:"target_date,omitempty"`
+	EndDate       *time.Time     `json:"end_date,omitempty"`
+	DependsOn     []string       `json:"depends_on,omitempty"`
+	Sequence      int            `json:"sequence,omitempty"`
+	Tasks         []UserPlanTask `json:"tasks"`
 }
 
 type UserPlanTask struct {
@@ -229,7 +234,13 @@ type UserPlanTask struct {
 	Title       string     `json:"title"`
 	Status      string     `json:"status"`
 	Notes       string     `json:"notes"`
+	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
+	StartAt     *time.Time `json:"start_at,omitempty"`
+	TargetAt    *time.Time `json:"target_at,omitempty"`
 	DueAt       *time.Time `json:"due_at,omitempty"`
+	EndAt       *time.Time `json:"end_at,omitempty"`
+	DependsOn   []string   `json:"depends_on,omitempty"`
+	Sequence    int        `json:"sequence,omitempty"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
 

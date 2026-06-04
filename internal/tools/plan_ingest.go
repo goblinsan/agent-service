@@ -84,12 +84,17 @@ type structuredSupportingItem struct {
 }
 
 type structuredPlanMilestone struct {
-	ID         string               `yaml:"id" json:"id"`
-	Title      string               `yaml:"title" json:"title"`
-	Status     string               `yaml:"status" json:"status"`
-	Summary    string               `yaml:"summary" json:"summary"`
-	TargetDate *time.Time           `yaml:"target_date,omitempty" json:"target_date,omitempty"`
-	Tasks      []structuredPlanTask `yaml:"tasks" json:"tasks"`
+	ID            string               `yaml:"id" json:"id"`
+	Title         string               `yaml:"title" json:"title"`
+	Status        string               `yaml:"status" json:"status"`
+	Summary       string               `yaml:"summary" json:"summary"`
+	ScheduledDate *time.Time           `yaml:"scheduled_date,omitempty" json:"scheduled_date,omitempty"`
+	StartDate     *time.Time           `yaml:"start_date,omitempty" json:"start_date,omitempty"`
+	TargetDate    *time.Time           `yaml:"target_date,omitempty" json:"target_date,omitempty"`
+	EndDate       *time.Time           `yaml:"end_date,omitempty" json:"end_date,omitempty"`
+	DependsOn     []string             `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
+	Sequence      int                  `yaml:"sequence,omitempty" json:"sequence,omitempty"`
+	Tasks         []structuredPlanTask `yaml:"tasks" json:"tasks"`
 }
 
 type structuredPlanTask struct {
@@ -97,7 +102,13 @@ type structuredPlanTask struct {
 	Title       string     `yaml:"title" json:"title"`
 	Status      string     `yaml:"status" json:"status"`
 	Notes       string     `yaml:"notes" json:"notes"`
+	ScheduledAt *time.Time `yaml:"scheduled_at,omitempty" json:"scheduled_at,omitempty"`
+	StartAt     *time.Time `yaml:"start_at,omitempty" json:"start_at,omitempty"`
+	TargetAt    *time.Time `yaml:"target_at,omitempty" json:"target_at,omitempty"`
 	DueAt       *time.Time `yaml:"due_at,omitempty" json:"due_at,omitempty"`
+	EndAt       *time.Time `yaml:"end_at,omitempty" json:"end_at,omitempty"`
+	DependsOn   []string   `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
+	Sequence    int        `yaml:"sequence,omitempty" json:"sequence,omitempty"`
 	CompletedAt *time.Time `yaml:"completed_at,omitempty" json:"completed_at,omitempty"`
 }
 
@@ -563,17 +574,28 @@ func structuredMilestonesToStore(input []structuredPlanMilestone) []store.UserPl
 				Title:       taskTitle,
 				Status:      firstNonEmptyString(strings.TrimSpace(task.Status), "todo"),
 				Notes:       strings.TrimSpace(task.Notes),
+				ScheduledAt: task.ScheduledAt,
+				StartAt:     task.StartAt,
+				TargetAt:    task.TargetAt,
 				DueAt:       task.DueAt,
+				EndAt:       task.EndAt,
+				DependsOn:   normalizeStringSlice(task.DependsOn),
+				Sequence:    task.Sequence,
 				CompletedAt: task.CompletedAt,
 			})
 		}
 		out = append(out, store.UserPlanMilestone{
-			ID:         id,
-			Title:      title,
-			Status:     firstNonEmptyString(strings.TrimSpace(milestone.Status), "todo"),
-			Summary:    strings.TrimSpace(milestone.Summary),
-			TargetDate: milestone.TargetDate,
-			Tasks:      tasks,
+			ID:            id,
+			Title:         title,
+			Status:        firstNonEmptyString(strings.TrimSpace(milestone.Status), "todo"),
+			Summary:       strings.TrimSpace(milestone.Summary),
+			ScheduledDate: milestone.ScheduledDate,
+			StartDate:     milestone.StartDate,
+			TargetDate:    milestone.TargetDate,
+			EndDate:       milestone.EndDate,
+			DependsOn:     normalizeStringSlice(milestone.DependsOn),
+			Sequence:      milestone.Sequence,
+			Tasks:         tasks,
 		})
 	}
 	return out
@@ -746,17 +768,28 @@ func structuredMilestonesFromStore(input []store.UserPlanMilestone) []structured
 				Title:       task.Title,
 				Status:      task.Status,
 				Notes:       task.Notes,
+				ScheduledAt: task.ScheduledAt,
+				StartAt:     task.StartAt,
+				TargetAt:    task.TargetAt,
 				DueAt:       task.DueAt,
+				EndAt:       task.EndAt,
+				DependsOn:   append([]string(nil), task.DependsOn...),
+				Sequence:    task.Sequence,
 				CompletedAt: task.CompletedAt,
 			})
 		}
 		out = append(out, structuredPlanMilestone{
-			ID:         milestone.ID,
-			Title:      milestone.Title,
-			Status:     milestone.Status,
-			Summary:    milestone.Summary,
-			TargetDate: milestone.TargetDate,
-			Tasks:      tasks,
+			ID:            milestone.ID,
+			Title:         milestone.Title,
+			Status:        milestone.Status,
+			Summary:       milestone.Summary,
+			ScheduledDate: milestone.ScheduledDate,
+			StartDate:     milestone.StartDate,
+			TargetDate:    milestone.TargetDate,
+			EndDate:       milestone.EndDate,
+			DependsOn:     append([]string(nil), milestone.DependsOn...),
+			Sequence:      milestone.Sequence,
+			Tasks:         tasks,
 		})
 	}
 	return out

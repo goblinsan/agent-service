@@ -107,7 +107,7 @@ func TestPlanUpsertAndExportRoundTripDurableMetadata(t *testing.T) {
 		"success_criteria":["Round-trip YAML"],
 		"cadence":[{"day":"mon","activity":"Review backlog"}],
 		"supporting_sections":[{"title":"References","kind":"links","items":[{"label":"Spec","kind":"doc","uri":"https://example.com/spec"}]}],
-		"milestones":[{"id":"m1","title":"Storage","target_date":"2026-07-01T00:00:00Z","tasks":[{"id":"m1-t1","title":"Add export","status":"done","due_at":"2026-06-10T09:00:00Z","completed_at":"2026-06-11T10:00:00Z"}]}]
+		"milestones":[{"id":"m1","title":"Storage","scheduled_date":"2026-06-01T00:00:00Z","start_date":"2026-06-02T00:00:00Z","target_date":"2026-07-01T00:00:00Z","end_date":"2026-07-10T00:00:00Z","depends_on":["m0"],"sequence":2,"tasks":[{"id":"m1-t1","title":"Add export","status":"done","scheduled_at":"2026-06-04T09:00:00Z","start_at":"2026-06-05T09:00:00Z","target_at":"2026-06-09T09:00:00Z","due_at":"2026-06-10T09:00:00Z","end_at":"2026-06-12T09:00:00Z","depends_on":["m1-t0"],"sequence":3,"completed_at":"2026-06-11T10:00:00Z"}]}]
 	}`))
 	createReq.Header.Set("X-User-ID", "u1")
 	createReq.Header.Set("Content-Type", "application/json")
@@ -142,7 +142,14 @@ func TestPlanUpsertAndExportRoundTripDurableMetadata(t *testing.T) {
 	assert.Contains(t, exported, "external_id: goblinsan/agent-service")
 	assert.Contains(t, exported, "tracked_metrics:")
 	assert.Contains(t, exported, "supporting_sections:")
+	assert.Contains(t, exported, "scheduled_date: 2026-06-01T00:00:00Z")
+	assert.Contains(t, exported, "start_date: 2026-06-02T00:00:00Z")
 	assert.Contains(t, exported, "target_date: 2026-07-01T00:00:00Z")
+	assert.Contains(t, exported, "end_date: 2026-07-10T00:00:00Z")
+	assert.Contains(t, exported, "depends_on:")
+	assert.Contains(t, exported, "sequence: 2")
+	assert.Contains(t, exported, "scheduled_at: 2026-06-04T09:00:00Z")
+	assert.Contains(t, exported, "target_at: 2026-06-09T09:00:00Z")
 	assert.Contains(t, exported, "due_at: 2026-06-10T09:00:00Z")
 
 	importPayload, err := json.Marshal(map[string]string{
@@ -164,6 +171,19 @@ func TestPlanUpsertAndExportRoundTripDurableMetadata(t *testing.T) {
 	require.Equal(t, created.Plan.ID, plans[0].ID)
 	require.Len(t, plans[0].Connectors, 1)
 	require.Equal(t, "goblinsan/agent-service", plans[0].Connectors[0].ExternalID)
+	require.Len(t, plans[0].Milestones, 1)
+	require.NotNil(t, plans[0].Milestones[0].ScheduledDate)
+	require.NotNil(t, plans[0].Milestones[0].StartDate)
+	require.NotNil(t, plans[0].Milestones[0].EndDate)
+	require.Equal(t, []string{"m0"}, plans[0].Milestones[0].DependsOn)
+	require.Equal(t, 2, plans[0].Milestones[0].Sequence)
+	require.Len(t, plans[0].Milestones[0].Tasks, 1)
+	require.NotNil(t, plans[0].Milestones[0].Tasks[0].ScheduledAt)
+	require.NotNil(t, plans[0].Milestones[0].Tasks[0].StartAt)
+	require.NotNil(t, plans[0].Milestones[0].Tasks[0].TargetAt)
+	require.NotNil(t, plans[0].Milestones[0].Tasks[0].EndAt)
+	require.Equal(t, []string{"m1-t0"}, plans[0].Milestones[0].Tasks[0].DependsOn)
+	require.Equal(t, 3, plans[0].Milestones[0].Tasks[0].Sequence)
 }
 
 func TestPlanExportEndpointSupportsJSON(t *testing.T) {
@@ -395,4 +415,102 @@ func TestPlanningWorkspaceEndpointTracksPlanCRUDState(t *testing.T) {
 	require.Len(t, workspace.Workspace.Plans[0].Milestones[0].Tasks, 1)
 	assert.Equal(t, created.Plan.Milestones[0].Tasks[0].ID, workspace.Workspace.Plans[0].Milestones[0].Tasks[0].ID)
 	assert.Equal(t, created.Plan.Milestones[0].Tasks[0].DueAt, workspace.Workspace.Plans[0].Milestones[0].Tasks[0].DueAt)
+}
+
+func TestPlanningWorkspaceEndpointIncludesExplicitSchedulingSemantics(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+	router := api.NewRouter(svc)
+
+	scheduledDate := time.Date(2100, time.January, 1, 15, 4, 5, 0, time.UTC)
+	startDate := time.Date(2100, time.January, 2, 15, 4, 5, 0, time.UTC)
+	targetDate := time.Date(2100, time.January, 3, 15, 4, 5, 0, time.UTC)
+	endDate := time.Date(2100, time.January, 4, 15, 4, 5, 0, time.UTC)
+	scheduledAt := time.Date(2100, time.January, 5, 15, 4, 5, 0, time.UTC)
+	startAt := time.Date(2100, time.January, 6, 15, 4, 5, 0, time.UTC)
+	targetAt := time.Date(2100, time.January, 7, 15, 4, 5, 0, time.UTC)
+	dueAt := time.Date(2100, time.January, 8, 15, 4, 5, 0, time.UTC)
+	endAt := time.Date(2100, time.January, 9, 15, 4, 5, 0, time.UTC)
+
+	ms.plans["u1"] = map[string]store.UserPlan{
+		"plan-1": {
+			ID:     "plan-1",
+			UserID: "u1",
+			Title:  "Scheduling",
+			Status: "active",
+			Milestones: []store.UserPlanMilestone{{
+				ID:            "m1",
+				Title:         "Milestone",
+				Status:        "doing",
+				ScheduledDate: &scheduledDate,
+				StartDate:     &startDate,
+				TargetDate:    &targetDate,
+				EndDate:       &endDate,
+				DependsOn:     []string{"m0"},
+				Sequence:      2,
+				Tasks: []store.UserPlanTask{{
+					ID:          "t1",
+					Title:       "Task",
+					Status:      "todo",
+					ScheduledAt: &scheduledAt,
+					StartAt:     &startAt,
+					TargetAt:    &targetAt,
+					DueAt:       &dueAt,
+					EndAt:       &endAt,
+					DependsOn:   []string{"t0"},
+					Sequence:    3,
+				}},
+			}},
+			Progress: store.UserPlanProgress{
+				MilestoneCount: 1,
+				TaskCount:      1,
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/plans/workspace", nil)
+	req.Header.Set("X-User-ID", "u1")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var body struct {
+		Workspace struct {
+			Timeline struct {
+				AuthoritativeDateFields []string `json:"authoritative_date_fields"`
+				Items                   []struct {
+					Kind        string   `json:"kind"`
+					DateKind    string   `json:"date_kind"`
+					DependsOn   []string `json:"depends_on"`
+					Sequence    int      `json:"sequence"`
+					MilestoneID string   `json:"milestone_id"`
+					TaskID      string   `json:"task_id"`
+				} `json:"items"`
+			} `json:"timeline"`
+		} `json:"workspace"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.True(t, slices.Contains(body.Workspace.Timeline.AuthoritativeDateFields, "milestones[].scheduled_date"))
+	assert.True(t, slices.Contains(body.Workspace.Timeline.AuthoritativeDateFields, "milestones[].start_date"))
+	assert.True(t, slices.Contains(body.Workspace.Timeline.AuthoritativeDateFields, "milestones[].end_date"))
+	assert.True(t, slices.Contains(body.Workspace.Timeline.AuthoritativeDateFields, "milestones[].tasks[].scheduled_at"))
+	assert.True(t, slices.Contains(body.Workspace.Timeline.AuthoritativeDateFields, "milestones[].tasks[].target_at"))
+	assert.True(t, slices.Contains(body.Workspace.Timeline.AuthoritativeDateFields, "milestones[].tasks[].end_at"))
+	require.Len(t, body.Workspace.Timeline.Items, 9)
+
+	var milestoneScheduled, taskDue bool
+	for _, item := range body.Workspace.Timeline.Items {
+		switch {
+		case item.Kind == "milestone" && item.MilestoneID == "m1" && item.DateKind == "scheduled_date":
+			milestoneScheduled = true
+			assert.Equal(t, []string{"m0"}, item.DependsOn)
+			assert.Equal(t, 2, item.Sequence)
+		case item.Kind == "task" && item.TaskID == "t1" && item.DateKind == "due_at":
+			taskDue = true
+			assert.Equal(t, []string{"t0"}, item.DependsOn)
+			assert.Equal(t, 3, item.Sequence)
+		}
+	}
+	assert.True(t, milestoneScheduled)
+	assert.True(t, taskDue)
 }
