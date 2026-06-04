@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/goblinsan/agent-service/internal/api"
 	"github.com/goblinsan/agent-service/internal/service"
@@ -190,4 +192,207 @@ func TestPlanExportEndpointSupportsJSON(t *testing.T) {
 	assert.Contains(t, resp.Header().Get("Content-Type"), "application/json")
 	assert.Contains(t, resp.Header().Get("Content-Disposition"), ".json")
 	assert.True(t, strings.Contains(resp.Body.String(), `"external_id": "goblinsan/agent-service"`) || strings.Contains(resp.Body.String(), `"external_id":"goblinsan/agent-service"`))
+}
+
+func TestPlanningWorkspaceEndpointReturnsCanonicalPlansAndDerivedTimeline(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+	router := api.NewRouter(svc)
+
+	pastDue := time.Date(2020, time.January, 2, 15, 4, 5, 0, time.UTC)
+	futureDue := time.Date(2100, time.January, 3, 15, 4, 5, 0, time.UTC)
+	futureTarget := time.Date(2100, time.January, 4, 15, 4, 5, 0, time.UTC)
+	completedAt := time.Date(2020, time.January, 1, 15, 4, 5, 0, time.UTC)
+
+	ms.plans["u1"] = map[string]store.UserPlan{
+		"plan-1": {
+			ID:     "plan-1",
+			UserID: "u1",
+			Title:  "Launch migration",
+			Status: "active",
+			Milestones: []store.UserPlanMilestone{{
+				ID:         "m1",
+				Title:      "Backend contract",
+				Status:     "doing",
+				TargetDate: &futureTarget,
+				Tasks: []store.UserPlanTask{
+					{ID: "t1", Title: "Add workspace endpoint", Status: "todo", DueAt: &pastDue},
+					{ID: "t2", Title: "Document timeline fields", Status: "done", DueAt: &futureDue, CompletedAt: &completedAt},
+				},
+			}},
+			Progress: store.UserPlanProgress{
+				MilestoneCount:      1,
+				TaskCount:           2,
+				CompletedTasks:      1,
+				PercentComplete:     50,
+				CompletedMilestones: 0,
+			},
+		},
+	}
+	ms.plans["u2"] = map[string]store.UserPlan{
+		"plan-2": {
+			ID:     "plan-2",
+			UserID: "u2",
+			Title:  "Other user plan",
+			Status: "active",
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/plans/workspace", nil)
+	req.Header.Set("X-User-ID", "u1")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var body struct {
+		Workspace struct {
+			Plans []struct {
+				ID    string `json:"id"`
+				Title string `json:"title"`
+			} `json:"plans"`
+			Summary struct {
+				PlanCount              int     `json:"plan_count"`
+				MilestoneCount         int     `json:"milestone_count"`
+				TaskCount              int     `json:"task_count"`
+				CompletedTasks         int     `json:"completed_tasks"`
+				PercentComplete        float64 `json:"percent_complete"`
+				DatedItemCount         int     `json:"dated_item_count"`
+				OverdueTaskCount       int     `json:"overdue_task_count"`
+				UpcomingTaskCount      int     `json:"upcoming_task_count"`
+				UpcomingMilestoneCount int     `json:"upcoming_milestone_count"`
+			} `json:"summary"`
+			Timeline struct {
+				AuthoritativeDateFields []string `json:"authoritative_date_fields"`
+				OrderingSemantics       string   `json:"ordering_semantics"`
+				HasHeuristicDates       bool     `json:"has_heuristic_dates"`
+				Items                   []struct {
+					Kind           string     `json:"kind"`
+					PlanID         string     `json:"plan_id"`
+					MilestoneID    string     `json:"milestone_id"`
+					TaskID         string     `json:"task_id"`
+					DateKind       string     `json:"date_kind"`
+					DateConfidence string     `json:"date_confidence"`
+					IsCompleted    bool       `json:"is_completed"`
+					IsOverdue      bool       `json:"is_overdue"`
+					CompletedAt    *time.Time `json:"completed_at"`
+				} `json:"items"`
+			} `json:"timeline"`
+		} `json:"workspace"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+
+	require.Len(t, body.Workspace.Plans, 1)
+	require.Equal(t, "plan-1", body.Workspace.Plans[0].ID)
+	require.Equal(t, "Launch migration", body.Workspace.Plans[0].Title)
+
+	assert.Equal(t, 1, body.Workspace.Summary.PlanCount)
+	assert.Equal(t, 1, body.Workspace.Summary.MilestoneCount)
+	assert.Equal(t, 2, body.Workspace.Summary.TaskCount)
+	assert.Equal(t, 1, body.Workspace.Summary.CompletedTasks)
+	assert.Equal(t, 50.0, body.Workspace.Summary.PercentComplete)
+	assert.Equal(t, 3, body.Workspace.Summary.DatedItemCount)
+	assert.Equal(t, 1, body.Workspace.Summary.OverdueTaskCount)
+	assert.Equal(t, 0, body.Workspace.Summary.UpcomingTaskCount)
+	assert.Equal(t, 1, body.Workspace.Summary.UpcomingMilestoneCount)
+
+	assert.False(t, body.Workspace.Timeline.HasHeuristicDates)
+	assert.True(t, slices.Contains(body.Workspace.Timeline.AuthoritativeDateFields, "milestones[].target_date"))
+	assert.Equal(t, "items are sorted by authoritative date; ties preserve canonical plan, milestone, and task order from the durable plan model", body.Workspace.Timeline.OrderingSemantics)
+	require.Len(t, body.Workspace.Timeline.Items, 3)
+
+	var overdueTaskFound, completedTaskFound, milestoneFound bool
+	for _, item := range body.Workspace.Timeline.Items {
+		assert.Equal(t, "plan-1", item.PlanID)
+		assert.Equal(t, "authoritative", item.DateConfidence)
+		switch {
+		case item.Kind == "task" && item.TaskID == "t1":
+			overdueTaskFound = true
+			assert.Equal(t, "due_at", item.DateKind)
+			assert.True(t, item.IsOverdue)
+			assert.False(t, item.IsCompleted)
+		case item.Kind == "task" && item.TaskID == "t2":
+			completedTaskFound = true
+			assert.Equal(t, "due_at", item.DateKind)
+			assert.False(t, item.IsOverdue)
+			assert.True(t, item.IsCompleted)
+			require.NotNil(t, item.CompletedAt)
+		case item.Kind == "milestone" && item.MilestoneID == "m1":
+			milestoneFound = true
+			assert.Equal(t, "target_date", item.DateKind)
+			assert.False(t, item.IsCompleted)
+			assert.False(t, item.IsOverdue)
+		}
+	}
+	assert.True(t, overdueTaskFound)
+	assert.True(t, completedTaskFound)
+	assert.True(t, milestoneFound)
+}
+
+func TestPlanningWorkspaceEndpointTracksPlanCRUDState(t *testing.T) {
+	ms := newMockStore()
+	svc := service.New(ms, &mockProvider{}, 10)
+	router := api.NewRouter(svc)
+
+	dueAt := time.Date(2100, time.January, 2, 15, 4, 5, 0, time.UTC).Format(time.RFC3339)
+	targetDate := time.Date(2100, time.January, 4, 15, 4, 5, 0, time.UTC).Format(time.RFC3339)
+
+	createReq := httptest.NewRequest(http.MethodPost, "/internal/plans", bytes.NewBufferString(`{
+		"title":"Planning workspace launch",
+		"target":"Support a dedicated planning screen",
+		"milestones":[{"id":"m1","title":"Read model","target_date":"`+targetDate+`","tasks":[{"id":"t1","title":"Add planning workspace endpoint","status":"todo","due_at":"`+dueAt+`"}]}]
+	}`))
+	createReq.Header.Set("X-User-ID", "u1")
+	createReq.Header.Set("Content-Type", "application/json")
+	createResp := httptest.NewRecorder()
+	router.ServeHTTP(createResp, createReq)
+	require.Equal(t, http.StatusCreated, createResp.Code)
+
+	var created struct {
+		Plan struct {
+			ID         string `json:"id"`
+			Target     string `json:"target"`
+			Milestones []struct {
+				ID         string     `json:"id"`
+				TargetDate *time.Time `json:"target_date"`
+				Tasks      []struct {
+					ID    string     `json:"id"`
+					DueAt *time.Time `json:"due_at"`
+				} `json:"tasks"`
+			} `json:"milestones"`
+		} `json:"plan"`
+	}
+	require.NoError(t, json.NewDecoder(createResp.Body).Decode(&created))
+
+	workspaceReq := httptest.NewRequest(http.MethodGet, "/internal/plans/workspace", nil)
+	workspaceReq.Header.Set("X-User-ID", "u1")
+	workspaceResp := httptest.NewRecorder()
+	router.ServeHTTP(workspaceResp, workspaceReq)
+	require.Equal(t, http.StatusOK, workspaceResp.Code)
+
+	var workspace struct {
+		Workspace struct {
+			Plans []struct {
+				ID         string `json:"id"`
+				Target     string `json:"target"`
+				Milestones []struct {
+					ID         string     `json:"id"`
+					TargetDate *time.Time `json:"target_date"`
+					Tasks      []struct {
+						ID    string     `json:"id"`
+						DueAt *time.Time `json:"due_at"`
+					} `json:"tasks"`
+				} `json:"milestones"`
+			} `json:"plans"`
+		} `json:"workspace"`
+	}
+	require.NoError(t, json.NewDecoder(workspaceResp.Body).Decode(&workspace))
+	require.Len(t, workspace.Workspace.Plans, 1)
+	assert.Equal(t, created.Plan.ID, workspace.Workspace.Plans[0].ID)
+	assert.Equal(t, created.Plan.Target, workspace.Workspace.Plans[0].Target)
+	require.Len(t, workspace.Workspace.Plans[0].Milestones, 1)
+	assert.Equal(t, created.Plan.Milestones[0].ID, workspace.Workspace.Plans[0].Milestones[0].ID)
+	assert.Equal(t, created.Plan.Milestones[0].TargetDate, workspace.Workspace.Plans[0].Milestones[0].TargetDate)
+	require.Len(t, workspace.Workspace.Plans[0].Milestones[0].Tasks, 1)
+	assert.Equal(t, created.Plan.Milestones[0].Tasks[0].ID, workspace.Workspace.Plans[0].Milestones[0].Tasks[0].ID)
+	assert.Equal(t, created.Plan.Milestones[0].Tasks[0].DueAt, workspace.Workspace.Plans[0].Milestones[0].Tasks[0].DueAt)
 }

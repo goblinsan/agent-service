@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -116,6 +117,7 @@ func NewRouterWithOptions(svc *service.Service, opts RouterOptions) http.Handler
 
 	// Plan CRUD endpoints.
 	r.Get("/internal/plans", listPlansHandler(svc))
+	r.Get("/internal/plans/workspace", planningWorkspaceHandler(svc))
 	r.Get("/internal/plans/{id}", getPlanHandler(svc))
 	r.Get("/internal/plans/{id}/export", exportPlanHandler(svc))
 	r.Post("/internal/plans", upsertPlanHandler(svc))
@@ -1090,6 +1092,200 @@ func listPlansHandler(svc *service.Service) http.HandlerFunc {
 			slog.Error("failed to encode plans response", "error", err)
 		}
 	}
+}
+
+type planningWorkspaceResponse struct {
+	Workspace planningWorkspaceView `json:"workspace"`
+}
+
+type planningWorkspaceView struct {
+	GeneratedAt time.Time                 `json:"generated_at"`
+	Summary     planningWorkspaceSummary  `json:"summary"`
+	Plans       []store.UserPlan          `json:"plans"`
+	Timeline    planningWorkspaceTimeline `json:"timeline"`
+}
+
+type planningWorkspaceSummary struct {
+	PlanCount              int     `json:"plan_count"`
+	MilestoneCount         int     `json:"milestone_count"`
+	CompletedMilestones    int     `json:"completed_milestones"`
+	TaskCount              int     `json:"task_count"`
+	CompletedTasks         int     `json:"completed_tasks"`
+	PercentComplete        float64 `json:"percent_complete"`
+	DatedItemCount         int     `json:"dated_item_count"`
+	OverdueTaskCount       int     `json:"overdue_task_count"`
+	UpcomingTaskCount      int     `json:"upcoming_task_count"`
+	UpcomingMilestoneCount int     `json:"upcoming_milestone_count"`
+}
+
+type planningWorkspaceTimeline struct {
+	AuthoritativeDateFields []string                `json:"authoritative_date_fields"`
+	OrderingSemantics       string                  `json:"ordering_semantics"`
+	HasHeuristicDates       bool                    `json:"has_heuristic_dates"`
+	Items                   []planningWorkspaceItem `json:"items"`
+}
+
+type planningWorkspaceItem struct {
+	Kind           string     `json:"kind"`
+	PlanID         string     `json:"plan_id"`
+	PlanTitle      string     `json:"plan_title"`
+	MilestoneID    string     `json:"milestone_id,omitempty"`
+	MilestoneTitle string     `json:"milestone_title,omitempty"`
+	TaskID         string     `json:"task_id,omitempty"`
+	Title          string     `json:"title"`
+	Status         string     `json:"status"`
+	Date           time.Time  `json:"date"`
+	DateKind       string     `json:"date_kind"`
+	DateConfidence string     `json:"date_confidence"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	IsCompleted    bool       `json:"is_completed"`
+	IsOverdue      bool       `json:"is_overdue"`
+	PlanOrder      int        `json:"plan_order"`
+	MilestoneOrder int        `json:"milestone_order,omitempty"`
+	TaskOrder      int        `json:"task_order,omitempty"`
+}
+
+func planningWorkspaceHandler(svc *service.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, `{"error":"X-User-ID header is required"}`, http.StatusBadRequest)
+			return
+		}
+		plans, err := svc.ListActivePlans(r.Context(), userID)
+		if err != nil {
+			slog.Error("list planning workspace failed", "error", err, "user_id", userID)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		if plans == nil {
+			plans = []store.UserPlan{}
+		}
+		if err := json.NewEncoder(w).Encode(planningWorkspaceResponse{
+			Workspace: buildPlanningWorkspaceView(plans, time.Now().UTC()),
+		}); err != nil {
+			slog.Error("failed to encode planning workspace response", "error", err)
+		}
+	}
+}
+
+func buildPlanningWorkspaceView(plans []store.UserPlan, now time.Time) planningWorkspaceView {
+	view := planningWorkspaceView{
+		GeneratedAt: now,
+		Plans:       plans,
+		Timeline: planningWorkspaceTimeline{
+			AuthoritativeDateFields: []string{"milestones[].target_date", "milestones[].tasks[].due_at", "milestones[].tasks[].completed_at"},
+			OrderingSemantics:       "items are sorted by authoritative date; ties preserve canonical plan, milestone, and task order from the durable plan model",
+			HasHeuristicDates:       false,
+			Items:                   []planningWorkspaceItem{},
+		},
+	}
+	summary := planningWorkspaceSummary{PlanCount: len(plans)}
+	for planOrder, plan := range plans {
+		summary.MilestoneCount += plan.Progress.MilestoneCount
+		summary.CompletedMilestones += plan.Progress.CompletedMilestones
+		summary.TaskCount += plan.Progress.TaskCount
+		summary.CompletedTasks += plan.Progress.CompletedTasks
+		for milestoneOrder, milestone := range plan.Milestones {
+			if milestone.TargetDate != nil {
+				view.Timeline.Items = append(view.Timeline.Items, planningWorkspaceItem{
+					Kind:           "milestone",
+					PlanID:         plan.ID,
+					PlanTitle:      plan.Title,
+					MilestoneID:    milestone.ID,
+					MilestoneTitle: milestone.Title,
+					Title:          milestone.Title,
+					Status:         milestone.Status,
+					Date:           milestone.TargetDate.UTC(),
+					DateKind:       "target_date",
+					DateConfidence: "authoritative",
+					IsCompleted:    planningMilestoneDone(milestone),
+					IsOverdue:      !planningMilestoneDone(milestone) && milestone.TargetDate.Before(now),
+					PlanOrder:      planOrder,
+					MilestoneOrder: milestoneOrder,
+				})
+				summary.DatedItemCount++
+				if !planningMilestoneDone(milestone) && !milestone.TargetDate.Before(now) {
+					summary.UpcomingMilestoneCount++
+				}
+			}
+			for taskOrder, task := range milestone.Tasks {
+				if task.DueAt == nil {
+					continue
+				}
+				isCompleted := planningTaskDone(task)
+				isOverdue := !isCompleted && task.DueAt.Before(now)
+				view.Timeline.Items = append(view.Timeline.Items, planningWorkspaceItem{
+					Kind:           "task",
+					PlanID:         plan.ID,
+					PlanTitle:      plan.Title,
+					MilestoneID:    milestone.ID,
+					MilestoneTitle: milestone.Title,
+					TaskID:         task.ID,
+					Title:          task.Title,
+					Status:         task.Status,
+					Date:           task.DueAt.UTC(),
+					DateKind:       "due_at",
+					DateConfidence: "authoritative",
+					CompletedAt:    task.CompletedAt,
+					IsCompleted:    isCompleted,
+					IsOverdue:      isOverdue,
+					PlanOrder:      planOrder,
+					MilestoneOrder: milestoneOrder,
+					TaskOrder:      taskOrder,
+				})
+				summary.DatedItemCount++
+				if isOverdue {
+					summary.OverdueTaskCount++
+				} else if !isCompleted {
+					summary.UpcomingTaskCount++
+				}
+			}
+		}
+	}
+	switch {
+	case summary.TaskCount > 0:
+		summary.PercentComplete = float64(summary.CompletedTasks) / float64(summary.TaskCount) * 100
+	case summary.MilestoneCount > 0:
+		summary.PercentComplete = float64(summary.CompletedMilestones) / float64(summary.MilestoneCount) * 100
+	}
+	sort.SliceStable(view.Timeline.Items, func(i, j int) bool {
+		left := view.Timeline.Items[i]
+		right := view.Timeline.Items[j]
+		switch {
+		case left.Date.Before(right.Date):
+			return true
+		case right.Date.Before(left.Date):
+			return false
+		case left.PlanOrder != right.PlanOrder:
+			return left.PlanOrder < right.PlanOrder
+		case left.MilestoneOrder != right.MilestoneOrder:
+			return left.MilestoneOrder < right.MilestoneOrder
+		default:
+			return left.TaskOrder < right.TaskOrder
+		}
+	})
+	view.Summary = summary
+	return view
+}
+
+func planningMilestoneDone(milestone store.UserPlanMilestone) bool {
+	if strings.EqualFold(strings.TrimSpace(milestone.Status), "done") {
+		return true
+	}
+	if len(milestone.Tasks) == 0 {
+		return false
+	}
+	for _, task := range milestone.Tasks {
+		if !planningTaskDone(task) {
+			return false
+		}
+	}
+	return true
+}
+
+func planningTaskDone(task store.UserPlanTask) bool {
+	return strings.EqualFold(strings.TrimSpace(task.Status), "done")
 }
 
 func getPlanHandler(svc *service.Service) http.HandlerFunc {
