@@ -2,8 +2,6 @@ package tools
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -18,7 +16,6 @@ type PersonalDataIngestTool struct {
 	Domain        string
 	ToolName      string
 	ToolDesc      string
-	PlanTitle     string
 	DefaultSource string
 	EventKind     string
 }
@@ -77,46 +74,31 @@ func (t *PersonalDataIngestTool) Execute(ctx context.Context, params map[string]
 		return nil, fmt.Errorf("list plans for personal data ingest: %w", err)
 	}
 	plan := findPlanForDomainOrConnector(plans, t.Domain, t.App)
-	created := false
-	if plan == nil {
-		created = true
-		planID, err := newPersonalDataPlanID(t.App)
-		if err != nil {
-			return nil, err
+	matchedPlan := plan != nil
+	if plan != nil {
+		if strings.TrimSpace(plan.ReviewCadence) == "" {
+			plan.ReviewCadence = reviewCadence
 		}
-		plan = &store.UserPlan{
-			ID:            planID,
-			UserID:        uid,
-			Title:         t.PlanTitle,
-			Status:        "active",
-			Category:      t.Domain,
-			Tags:          []string{t.Domain, "personal-data"},
-			ReviewCadence: reviewCadence,
+		if strings.TrimSpace(plan.Category) == "" {
+			plan.Category = t.Domain
 		}
-	}
+		plan.Summary = summary
+		plan.Metrics = mergeMetrics(plan.Metrics, metrics)
+		connector := store.PlanConnector{
+			App:        t.App,
+			Type:       "personal_data_app",
+			Domain:     t.Domain,
+			ExternalID: externalID,
+		}
+		plan.Connectors = appendConnectorIfMissing(plan.Connectors, connector)
+		plan.DataSources = mergeDataSourcesWithConnectors(plan.DataSources, plan.Connectors)
+		if !containsString(plan.DataSources, source) {
+			plan.DataSources = append(plan.DataSources, source)
+		}
 
-	if strings.TrimSpace(plan.ReviewCadence) == "" {
-		plan.ReviewCadence = reviewCadence
-	}
-	if strings.TrimSpace(plan.Category) == "" {
-		plan.Category = t.Domain
-	}
-	plan.Summary = summary
-	plan.Metrics = mergeMetrics(plan.Metrics, metrics)
-	connector := store.PlanConnector{
-		App:        t.App,
-		Type:       "personal_data_app",
-		Domain:     t.Domain,
-		ExternalID: externalID,
-	}
-	plan.Connectors = appendConnectorIfMissing(plan.Connectors, connector)
-	plan.DataSources = mergeDataSourcesWithConnectors(plan.DataSources, plan.Connectors)
-	if !containsString(plan.DataSources, source) {
-		plan.DataSources = append(plan.DataSources, source)
-	}
-
-	if err := t.Store.UpsertUserPlan(ctx, plan); err != nil {
-		return nil, fmt.Errorf("upsert personal data plan: %w", err)
+		if err := t.Store.UpsertUserPlan(ctx, plan); err != nil {
+			return nil, fmt.Errorf("upsert personal data plan: %w", err)
+		}
 	}
 
 	event := &store.UserEvent{
@@ -125,14 +107,14 @@ func (t *PersonalDataIngestTool) Execute(ctx context.Context, params map[string]
 		Source:  source,
 		Summary: summary,
 		Payload: map[string]any{
-			"app":      t.App,
-			"domain":   t.Domain,
-			"plan_id":  plan.ID,
-			"metrics":  metrics,
-			"created":  created,
-			"tool":     t.ToolName,
-			"review":   plan.ReviewCadence,
-			"category": plan.Category,
+			"app":          t.App,
+			"domain":       t.Domain,
+			"plan_id":      firstPlanID(plan),
+			"metrics":      metrics,
+			"matched_plan": matchedPlan,
+			"tool":         t.ToolName,
+			"review":       firstPlanReviewCadence(plan, reviewCadence),
+			"category":     firstPlanCategory(plan, t.Domain),
 		},
 	}
 	if err := t.Store.AppendUserEvent(ctx, event); err != nil {
@@ -140,24 +122,52 @@ func (t *PersonalDataIngestTool) Execute(ctx context.Context, params map[string]
 	}
 
 	return map[string]any{
-		"status":  "ok",
-		"created": created,
-		"plan": map[string]any{
-			"id":             plan.ID,
-			"title":          plan.Title,
-			"category":       plan.Category,
-			"data_sources":   plan.DataSources,
-			"connectors":     plan.Connectors,
-			"review_cadence": plan.ReviewCadence,
-			"summary":        plan.Summary,
-			"metrics":        plan.Metrics,
-		},
+		"status":       "ok",
+		"matched_plan": matchedPlan,
+		"plan":         serializePersonalDataPlan(plan),
 		"event": map[string]any{
 			"kind":    event.Kind,
 			"source":  event.Source,
 			"summary": event.Summary,
 		},
 	}, nil
+}
+
+func firstPlanID(plan *store.UserPlan) string {
+	if plan == nil {
+		return ""
+	}
+	return plan.ID
+}
+
+func firstPlanReviewCadence(plan *store.UserPlan, fallback string) string {
+	if plan == nil || strings.TrimSpace(plan.ReviewCadence) == "" {
+		return fallback
+	}
+	return plan.ReviewCadence
+}
+
+func firstPlanCategory(plan *store.UserPlan, fallback string) string {
+	if plan == nil || strings.TrimSpace(plan.Category) == "" {
+		return fallback
+	}
+	return plan.Category
+}
+
+func serializePersonalDataPlan(plan *store.UserPlan) map[string]any {
+	if plan == nil {
+		return nil
+	}
+	return map[string]any{
+		"id":             plan.ID,
+		"title":          plan.Title,
+		"category":       plan.Category,
+		"data_sources":   plan.DataSources,
+		"connectors":     plan.Connectors,
+		"review_cadence": plan.ReviewCadence,
+		"summary":        plan.Summary,
+		"metrics":        plan.Metrics,
+	}
 }
 
 func defaultPersonalDataSummary(app, domain, source string, rawMetrics any) string {
@@ -216,14 +226,6 @@ func mergeMetrics(existing, incoming map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
-}
-
-func newPersonalDataPlanID(app string) (string, error) {
-	var b [10]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("generate personal data plan id: %w", err)
-	}
-	return "plan-" + strings.ToLower(strings.TrimSpace(app)) + "-" + hex.EncodeToString(b[:]), nil
 }
 
 func readNumeric(v any) (float64, bool) {

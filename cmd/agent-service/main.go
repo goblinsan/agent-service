@@ -120,7 +120,6 @@ func main() {
 		Domain:        "health",
 		ToolName:      "apple_health_ingest_activity",
 		ToolDesc:      "Ingest a normalized Apple Health activity summary into durable plan context and recent events so project-manager guidance reflects current exercise, recovery, and health progress.",
-		PlanTitle:     "Health goals & activity",
 		DefaultSource: "Apple Health",
 		EventKind:     "health_sync",
 	}); err != nil {
@@ -132,7 +131,6 @@ func main() {
 		Domain:        "nutrition",
 		ToolName:      "apple_health_ingest_nutrition",
 		ToolDesc:      "Ingest a normalized Apple Health nutrition summary into durable plan context and recent events so project-manager guidance reflects current nutrition progress, including data written into Apple Health by apps such as Lose It.",
-		PlanTitle:     "Nutrition goals & intake",
 		DefaultSource: "Apple Health",
 		EventKind:     "nutrition_sync",
 	}); err != nil {
@@ -144,7 +142,6 @@ func main() {
 		Domain:        "health",
 		ToolName:      "healthfit_ingest_summary",
 		ToolDesc:      "Ingest a normalized HealthFit summary into durable plan context and recent events so project-manager guidance reflects current activity and health progress.",
-		PlanTitle:     "Health goals & activity",
 		DefaultSource: "HealthFit",
 		EventKind:     "health_sync",
 	}); err != nil {
@@ -156,7 +153,6 @@ func main() {
 		Domain:        "nutrition",
 		ToolName:      "loseit_ingest_summary",
 		ToolDesc:      "Ingest a normalized Lose It summary into durable plan context and recent events so project-manager guidance reflects current nutrition progress.",
-		PlanTitle:     "Nutrition goals & intake",
 		DefaultSource: "Lose It",
 		EventKind:     "nutrition_sync",
 	}); err != nil {

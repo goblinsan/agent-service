@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAppleHealthSummaryEndpointUpsertsHealthAndNutritionPlans(t *testing.T) {
+func TestAppleHealthSummaryEndpointPersistsDataWithoutCreatingPlans(t *testing.T) {
 	ms := newMockStore()
 	svc := service.New(ms, &mockProvider{}, 10)
 	router := api.NewRouter(svc)
@@ -32,17 +32,11 @@ func TestAppleHealthSummaryEndpointUpsertsHealthAndNutritionPlans(t *testing.T) 
 	assert.Contains(t, resp.Body.String(), `"status":"ok"`)
 	assert.Contains(t, resp.Body.String(), `"source_batch"`)
 	assert.Len(t, ms.sourceRecords, 5)
+	assert.Contains(t, resp.Body.String(), `"matched_plan":false`)
 
 	plans, err := ms.ListActivePlans(req.Context(), "u1")
 	require.NoError(t, err)
-	require.Len(t, plans, 2)
-
-	byCategory := map[string]string{}
-	for _, plan := range plans {
-		byCategory[plan.Category] = plan.Connectors[0].App
-	}
-	assert.Equal(t, "apple-health", byCategory["health"])
-	assert.Equal(t, "apple-health", byCategory["nutrition"])
+	require.Len(t, plans, 0)
 }
 
 func TestAppleHealthSummaryEndpointRequiresMetrics(t *testing.T) {

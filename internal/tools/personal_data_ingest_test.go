@@ -15,7 +15,6 @@ func TestHealthFitIngestSummaryCreatesPlanAndEvent(t *testing.T) {
 		Domain:        "health",
 		ToolName:      "healthfit_ingest_summary",
 		ToolDesc:      "test",
-		PlanTitle:     "Health goals & activity",
 		DefaultSource: "HealthFit",
 		EventKind:     "health_sync",
 	}
@@ -31,30 +30,21 @@ func TestHealthFitIngestSummaryCreatesPlanAndEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.(map[string]any)["created"] != true {
-		t.Fatalf("expected created=true, got %v", res.(map[string]any)["created"])
+	result := res.(map[string]any)
+	if result["matched_plan"] != false {
+		t.Fatalf("expected matched_plan=false, got %v", result["matched_plan"])
 	}
-	if len(fs.upserts) != 1 {
-		t.Fatalf("expected 1 upsert, got %d", len(fs.upserts))
-	}
-	plan := fs.upserts[0]
-	if plan.Category != "health" {
-		t.Fatalf("expected health category, got %q", plan.Category)
-	}
-	if len(plan.Connectors) != 1 || plan.Connectors[0].App != "healthfit" {
-		t.Fatalf("unexpected connectors %#v", plan.Connectors)
-	}
-	if len(plan.DataSources) == 0 || plan.DataSources[0] != "healthfit" {
-		t.Fatalf("expected healthfit data source, got %#v", plan.DataSources)
-	}
-	if got := plan.Metrics["steps"]; got != 10000 {
-		t.Fatalf("unexpected steps metric %#v", plan.Metrics)
+	if len(fs.upserts) != 0 {
+		t.Fatalf("expected 0 upserts when no plan matches, got %d", len(fs.upserts))
 	}
 	if len(fs.events) != 1 {
 		t.Fatalf("expected 1 user event, got %d", len(fs.events))
 	}
 	if fs.events[0].Kind != "health_sync" {
 		t.Fatalf("unexpected event kind %q", fs.events[0].Kind)
+	}
+	if fs.events[0].Payload["matched_plan"] != false {
+		t.Fatalf("expected matched_plan=false in event payload, got %#v", fs.events[0].Payload["matched_plan"])
 	}
 }
 
@@ -77,7 +67,6 @@ func TestLoseItIngestSummaryUpdatesExistingPlan(t *testing.T) {
 		Domain:        "nutrition",
 		ToolName:      "loseit_ingest_summary",
 		ToolDesc:      "test",
-		PlanTitle:     "Nutrition goals & intake",
 		DefaultSource: "Lose It",
 		EventKind:     "nutrition_sync",
 	}
@@ -93,8 +82,8 @@ func TestLoseItIngestSummaryUpdatesExistingPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.(map[string]any)["created"] != false {
-		t.Fatalf("expected created=false, got %v", res.(map[string]any)["created"])
+	if res.(map[string]any)["matched_plan"] != true {
+		t.Fatalf("expected matched_plan=true, got %v", res.(map[string]any)["matched_plan"])
 	}
 	if len(fs.upserts) != 1 {
 		t.Fatalf("expected 1 upsert, got %d", len(fs.upserts))
@@ -144,7 +133,6 @@ func TestAppleHealthActivityAndNutritionStaySeparate(t *testing.T) {
 		Domain:        "nutrition",
 		ToolName:      "apple_health_ingest_nutrition",
 		ToolDesc:      "test",
-		PlanTitle:     "Nutrition goals & intake",
 		DefaultSource: "Apple Health",
 		EventKind:     "nutrition_sync",
 	}

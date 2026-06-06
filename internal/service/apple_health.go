@@ -41,7 +41,6 @@ func (s *Service) IngestAppleHealthSummary(ctx context.Context, userID string, r
 			Domain:        "health",
 			ToolName:      "apple_health_ingest_activity",
 			ToolDesc:      "Ingest Apple Health activity summary.",
-			PlanTitle:     "Health goals & activity",
 			DefaultSource: "Apple Health",
 			EventKind:     "health_sync",
 		}
@@ -65,7 +64,6 @@ func (s *Service) IngestAppleHealthSummary(ctx context.Context, userID string, r
 			Domain:        "nutrition",
 			ToolName:      "apple_health_ingest_nutrition",
 			ToolDesc:      "Ingest Apple Health nutrition summary.",
-			PlanTitle:     "Nutrition goals & intake",
 			DefaultSource: "Apple Health",
 			EventKind:     "nutrition_sync",
 		}
