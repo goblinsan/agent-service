@@ -631,7 +631,20 @@ func TestEffectiveAutomationToolPolicy_DeniesSchedulingForProjectCheckins(t *tes
 	require.NotNil(t, spec)
 	assert.Contains(t, spec.DeniedTools, "create_schedule")
 	assert.Contains(t, spec.DeniedTools, "create_project_checkin")
-	assert.Contains(t, spec.AllowedTools, "plan_upsert")
+	assert.Contains(t, spec.DeniedTools, "plan_upsert")
+	assert.Contains(t, spec.DeniedTools, "plan_ingest_text")
+}
+
+func TestEffectiveAutomationToolPolicy_DeniesUpsertForProjectCheckinNoExplicitPolicy(t *testing.T) {
+	spec := service.EffectiveAutomationToolPolicyForTest(&service.AutomationRunRequest{
+		JobType: "project_checkin",
+	})
+
+	require.NotNil(t, spec)
+	assert.Contains(t, spec.DeniedTools, "plan_upsert")
+	assert.Contains(t, spec.DeniedTools, "plan_ingest_text")
+	assert.Contains(t, spec.DeniedTools, "create_schedule")
+	assert.Contains(t, spec.DeniedTools, "create_project_checkin")
 }
 
 // ---------------------------------------------------------------------------

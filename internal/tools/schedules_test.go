@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -133,5 +134,45 @@ func TestProjectCheckinCreateToolRejectsUnknownWindow(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for unsupported window")
+	}
+}
+
+func TestDefaultProjectCheckinPromptReferencesPlanProgressUpdate(t *testing.T) {
+	for _, windows := range [][]string{
+		{"morning"},
+		{"morning", "night"},
+		{"afternoon"},
+		{},
+	} {
+		prompt := defaultProjectCheckinPrompt(windows)
+		if strings.Contains(prompt, "plan_upsert") {
+			t.Errorf("prompt for windows %v still references plan_upsert: %q", windows, prompt)
+		}
+		if !strings.Contains(prompt, "plan_progress_update") {
+			t.Errorf("prompt for windows %v does not reference plan_progress_update: %q", windows, prompt)
+		}
+	}
+}
+
+func TestProjectCheckinCreateToolEmbedsSafePrompt(t *testing.T) {
+	st := &fakeScheduleStore{}
+	tool := &ProjectCheckinCreateTool{Store: st}
+	ctx := WithUserID(context.Background(), "alice")
+
+	_, err := tool.Execute(ctx, map[string]any{
+		"windows":  []any{"morning"},
+		"timezone": "America/New_York",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if st.created == nil {
+		t.Fatal("expected schedule to be created")
+	}
+	if strings.Contains(st.created.Prompt, "plan_upsert") {
+		t.Errorf("stored prompt still references plan_upsert: %q", st.created.Prompt)
+	}
+	if !strings.Contains(st.created.Prompt, "plan_progress_update") {
+		t.Errorf("stored prompt does not reference plan_progress_update: %q", st.created.Prompt)
 	}
 }

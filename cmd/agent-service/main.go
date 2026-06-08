@@ -105,6 +105,9 @@ func main() {
 	if err := reg.Register(&tools.PlanUpsertTool{Store: pg}); err != nil {
 		slog.Warn("register plan_upsert", "error", err)
 	}
+	if err := reg.Register(&tools.PlanProgressUpdateTool{Store: pg}); err != nil {
+		slog.Warn("register plan_progress_update", "error", err)
+	}
 	if err := reg.Register(&tools.PlanIngestTextTool{Store: pg}); err != nil {
 		slog.Warn("register plan_ingest_text", "error", err)
 	}

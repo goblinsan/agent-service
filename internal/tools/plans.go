@@ -208,76 +208,98 @@ func (t *PlanUpsertTool) Execute(ctx context.Context, params map[string]any) (an
 	if title == "" {
 		return nil, errors.New("title is required")
 	}
-	id, _ := params["id"].(string)
-	id, created, err := resolvePlanIdentity(ctx, t.Store, uid, id, title)
+	rawID, _ := params["id"].(string)
+	id, created, err := resolvePlanIdentity(ctx, t.Store, uid, rawID, title)
 	if err != nil {
 		return nil, err
 	}
 	if id == "" {
 		id = newPlanID()
 	}
+
+	// Fetch the existing plan when updating so that omitted structured fields
+	// preserve their stored values rather than being erased by the partial payload.
+	// Only fields explicitly present in params overwrite existing data.
+	base := &store.UserPlan{ID: id, UserID: uid}
+	if !created {
+		if fetched, fetchErr := t.Store.GetUserPlan(ctx, uid, id); fetchErr == nil {
+			base = fetched
+		}
+	}
+
 	status, _ := params["status"].(string)
 	status = strings.TrimSpace(status)
 	if status == "" {
-		if created {
+		if created || base.Status == "" {
 			status = "active"
 		} else {
-			status = "active"
+			status = base.Status
 		}
 	}
-	summary, _ := params["summary"].(string)
-	vision, _ := params["vision"].(string)
-	vision = strings.TrimSpace(vision)
-	target, _ := params["target"].(string)
-	target = strings.TrimSpace(target)
-	category, _ := params["category"].(string)
-	category = strings.TrimSpace(category)
-	tags, err := normalizeStringList(params["tags"], "tags")
-	if err != nil {
-		return nil, err
+	// title and status are always applied (title is required; status always meaningful).
+	base.Title = title
+	base.Status = status
+
+	// For every optional field: only overwrite when the key appears in params.
+	if _, ok := params["summary"]; ok {
+		v, _ := params["summary"].(string)
+		base.Summary = strings.TrimSpace(v)
 	}
-	dataSources, err := normalizeStringList(params["data_sources"], "data_sources")
-	if err != nil {
-		return nil, err
+	if _, ok := params["vision"]; ok {
+		v, _ := params["vision"].(string)
+		base.Vision = strings.TrimSpace(v)
 	}
-	connectors, err := normalizePlanConnectors(params["connectors"])
-	if err != nil {
-		return nil, err
+	if _, ok := params["target"]; ok {
+		v, _ := params["target"].(string)
+		base.Target = strings.TrimSpace(v)
 	}
-	dataSources = mergeDataSourcesWithConnectors(dataSources, connectors)
-	reviewCadence, _ := params["review_cadence"].(string)
-	reviewCadence = strings.TrimSpace(reviewCadence)
-	metrics, err := normalizeObject(params["metrics"], "metrics")
-	if err != nil {
-		return nil, err
+	if _, ok := params["category"]; ok {
+		v, _ := params["category"].(string)
+		base.Category = strings.TrimSpace(v)
 	}
-	milestones, err := normalizePlanMilestones(params["milestones"])
-	if err != nil {
-		return nil, err
+	if _, ok := params["review_cadence"]; ok {
+		v, _ := params["review_cadence"].(string)
+		base.ReviewCadence = strings.TrimSpace(v)
+	}
+	if _, ok := params["tags"]; ok {
+		base.Tags, err = normalizeStringList(params["tags"], "tags")
+		if err != nil {
+			return nil, err
+		}
+	}
+	if _, ok := params["data_sources"]; ok {
+		base.DataSources, err = normalizeStringList(params["data_sources"], "data_sources")
+		if err != nil {
+			return nil, err
+		}
+	}
+	if _, ok := params["connectors"]; ok {
+		base.Connectors, err = normalizePlanConnectors(params["connectors"])
+		if err != nil {
+			return nil, err
+		}
+	}
+	base.DataSources = mergeDataSourcesWithConnectors(base.DataSources, base.Connectors)
+	if _, ok := params["metrics"]; ok {
+		base.Metrics, err = normalizeObject(params["metrics"], "metrics")
+		if err != nil {
+			return nil, err
+		}
+	}
+	if _, ok := params["milestones"]; ok {
+		base.Milestones, err = normalizePlanMilestones(params["milestones"])
+		if err != nil {
+			return nil, err
+		}
+	}
+	if _, ok := params["steps"]; ok {
+		base.Steps, err = normalizePlanSteps(params["steps"])
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	steps, err := normalizePlanSteps(params["steps"])
-	if err != nil {
-		return nil, err
-	}
-
-	plan := &store.UserPlan{
-		ID:            id,
-		UserID:        uid,
-		Title:         title,
-		Status:        status,
-		Vision:        vision,
-		Target:        target,
-		Category:      category,
-		Tags:          tags,
-		DataSources:   dataSources,
-		Connectors:    connectors,
-		ReviewCadence: reviewCadence,
-		Summary:       summary,
-		Metrics:       metrics,
-		Milestones:    milestones,
-		Steps:         steps,
-	}
+	plan := base
 	store.NormalizeUserPlan(plan)
 	if err := t.Store.UpsertUserPlan(ctx, plan); err != nil {
 		return nil, fmt.Errorf("upsert plan: %w", err)
@@ -701,4 +723,90 @@ func newPlanID() string {
 		return "plan-fallback"
 	}
 	return "plan-" + hex.EncodeToString(b[:])
+}
+
+// planProgressUpdateStructuralFields is the exhaustive set of fields that
+// plan_progress_update must never write, even if a caller supplies them.
+var planProgressUpdateStructuralFields = []string{
+	"milestones", "steps", "objectives", "principles",
+	"tracked_metrics", "baseline_facts", "success_criteria",
+	"cadence", "supporting_sections", "metrics",
+	"data_sources", "connectors", "category",
+	"review_cadence", "target", "vision",
+}
+
+// PlanProgressUpdateTool writes lightweight progress metadata to an existing
+// plan without touching structural fields. Scheduled check-in runs must use
+// this instead of plan_upsert so that milestones, tasks, metrics, and other
+// rich plan data are never overwritten by a partial payload.
+type PlanProgressUpdateTool struct {
+	Store store.Store
+}
+
+func (t *PlanProgressUpdateTool) Definition() Tool {
+	return Tool{
+		Name: "plan_progress_update",
+		Description: "Update lightweight progress metadata (summary, status, tags) on an existing plan. " +
+			"Safe for scheduled check-ins: never modifies milestones, tasks, metrics, success criteria, cadence, or other structural fields. " +
+			"Use plan_upsert for full plan editing in explicit user-driven flows.",
+		Params: []Param{
+			{Name: "id", Type: "string", Description: "ID of the plan to update (from plan_list).", Required: true},
+			{Name: "summary", Type: "string", Description: "Optional updated one- or two-sentence progress summary.", Required: false},
+			{Name: "status", Type: "string", Description: "Optional updated status: draft, active, paused, done, abandoned.", Required: false},
+			{Name: "tags", Type: "array", Description: "Optional updated list of free-form tags.", Required: false},
+		},
+	}
+}
+
+func (t *PlanProgressUpdateTool) Execute(ctx context.Context, params map[string]any) (any, error) {
+	if t.Store == nil {
+		return nil, errors.New("plan store not configured")
+	}
+	for _, field := range planProgressUpdateStructuralFields {
+		if _, ok := params[field]; ok {
+			return nil, fmt.Errorf("plan_progress_update cannot modify %q; use plan_upsert for full plan editing", field)
+		}
+	}
+	uid := UserIDFromContext(ctx)
+	if uid == "" {
+		return nil, errors.New("no authenticated user on this run; cannot update plan")
+	}
+	id, _ := params["id"].(string)
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, errors.New("id is required")
+	}
+	existing, err := t.Store.GetUserPlan(ctx, uid, id)
+	if err != nil {
+		return nil, fmt.Errorf("get plan: %w", err)
+	}
+	if summary, ok := params["summary"].(string); ok {
+		existing.Summary = strings.TrimSpace(summary)
+	}
+	if rawStatus, ok := params["status"].(string); ok {
+		if s := strings.TrimSpace(rawStatus); s != "" {
+			existing.Status = s
+		}
+	}
+	if tagsParam, ok := params["tags"]; ok && tagsParam != nil {
+		tags, err := normalizeStringList(tagsParam, "tags")
+		if err != nil {
+			return nil, err
+		}
+		existing.Tags = tags
+	}
+	store.NormalizeUserPlan(existing)
+	if err := t.Store.UpsertUserPlan(ctx, existing); err != nil {
+		return nil, fmt.Errorf("update plan: %w", err)
+	}
+	return map[string]any{
+		"status": "ok",
+		"plan": map[string]any{
+			"id":      existing.ID,
+			"title":   existing.Title,
+			"status":  existing.Status,
+			"summary": existing.Summary,
+			"tags":    existing.Tags,
+		},
+	}, nil
 }

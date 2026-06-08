@@ -42,6 +42,16 @@ func (f *fakePlanStore) AppendUserEvent(ctx context.Context, evt *store.UserEven
 	return nil
 }
 
+func (f *fakePlanStore) GetUserPlan(ctx context.Context, userID, planID string) (*store.UserPlan, error) {
+	for i := range f.plans {
+		if f.plans[i].ID == planID && f.plans[i].UserID == userID {
+			p := f.plans[i]
+			return &p, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
 func TestPlanListReturnsPlansForUser(t *testing.T) {
 	fs := &fakePlanStore{plans: []store.UserPlan{{
 		ID:            "p1",
@@ -699,5 +709,372 @@ func TestBuildUserPlanFromDocumentPreservesStructuredIdentityConnectorsAndDates(
 	}
 	if got := task.CompletedAt.UTC().Format(time.RFC3339); got != completedAt {
 		t.Fatalf("unexpected completed_at %q", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// PlanProgressUpdateTool
+// ---------------------------------------------------------------------------
+
+func TestPlanProgressUpdateTool_UpdatesSummaryAndStatus(t *testing.T) {
+	richPlan := store.UserPlan{
+		ID:     "p1",
+		UserID: "u1",
+		Title:  "Exit corp gig",
+		Status: "active",
+		Summary: "old summary",
+		Milestones: []store.UserPlanMilestone{
+			{ID: "m1", Title: "Ship v1", Status: "todo", Tasks: []store.UserPlanTask{
+				{ID: "t1", Title: "Write tests", Status: "todo"},
+			}},
+		},
+		TrackedMetrics:  []store.PlanTrackedMetric{{Name: "revenue"}},
+		BaselineFacts:   []store.PlanFact{{Label: "start", Value: "$0"}},
+		SuccessCriteria: []string{"$1k/day"},
+		Cadence:         []store.PlanCadenceEntry{{Label: "mon", Activity: "standup"}},
+	}
+	fs := &fakePlanStore{plans: []store.UserPlan{richPlan}}
+	tool := &PlanProgressUpdateTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+
+	result, err := tool.Execute(ctx, map[string]any{
+		"id":      "p1",
+		"summary": "shipped the first feature",
+		"status":  "active",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(fs.upserts) != 1 {
+		t.Fatalf("expected 1 upsert, got %d", len(fs.upserts))
+	}
+	saved := fs.upserts[0]
+	if saved.Summary != "shipped the first feature" {
+		t.Errorf("unexpected summary %q", saved.Summary)
+	}
+	// Structural fields must be preserved unchanged.
+	if len(saved.Milestones) != 1 || saved.Milestones[0].ID != "m1" {
+		t.Errorf("milestones were clobbered: %+v", saved.Milestones)
+	}
+	if len(saved.TrackedMetrics) != 1 || saved.TrackedMetrics[0].Name != "revenue" {
+		t.Errorf("tracked_metrics were clobbered: %+v", saved.TrackedMetrics)
+	}
+	if len(saved.BaselineFacts) != 1 || saved.BaselineFacts[0].Label != "start" {
+		t.Errorf("baseline_facts were clobbered: %+v", saved.BaselineFacts)
+	}
+	if len(saved.SuccessCriteria) != 1 || saved.SuccessCriteria[0] != "$1k/day" {
+		t.Errorf("success_criteria were clobbered: %+v", saved.SuccessCriteria)
+	}
+	if len(saved.Cadence) != 1 || saved.Cadence[0].Activity != "standup" {
+		t.Errorf("cadence was clobbered: %+v", saved.Cadence)
+	}
+
+	out, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected result type %T", result)
+	}
+	if out["status"] != "ok" {
+		t.Errorf("unexpected result status %q", out["status"])
+	}
+}
+
+func TestPlanProgressUpdateTool_RejectsStructuralFields(t *testing.T) {
+	fs := &fakePlanStore{plans: []store.UserPlan{{ID: "p1", UserID: "u1", Title: "Plan"}}}
+	tool := &PlanProgressUpdateTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+
+	structuralCases := []string{
+		"milestones", "steps", "objectives", "principles",
+		"tracked_metrics", "baseline_facts", "success_criteria",
+		"cadence", "supporting_sections", "metrics",
+		"data_sources", "connectors", "category",
+		"review_cadence", "target", "vision",
+	}
+	for _, field := range structuralCases {
+		_, err := tool.Execute(ctx, map[string]any{
+			"id":  "p1",
+			field: "should be rejected",
+		})
+		if err == nil {
+			t.Errorf("expected error for structural field %q, got nil", field)
+		}
+		if !strings.Contains(err.Error(), field) {
+			t.Errorf("error for field %q does not mention the field: %v", field, err)
+		}
+	}
+}
+
+func TestPlanProgressUpdateTool_RequiresPlanID(t *testing.T) {
+	fs := &fakePlanStore{}
+	tool := &PlanProgressUpdateTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+
+	_, err := tool.Execute(ctx, map[string]any{"summary": "something"})
+	if err == nil || !strings.Contains(err.Error(), "id is required") {
+		t.Fatalf("expected id required error, got %v", err)
+	}
+}
+
+func TestPlanProgressUpdateTool_ReturnsNotFoundForUnknownPlan(t *testing.T) {
+	fs := &fakePlanStore{plans: []store.UserPlan{}}
+	tool := &PlanProgressUpdateTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+
+	_, err := tool.Execute(ctx, map[string]any{"id": "nonexistent"})
+	if err == nil {
+		t.Fatal("expected error for unknown plan, got nil")
+	}
+}
+
+func TestPlanProgressUpdateTool_UpdatesTags(t *testing.T) {
+	fs := &fakePlanStore{plans: []store.UserPlan{{
+		ID:     "p1",
+		UserID: "u1",
+		Title:  "Health goal",
+		Tags:   []string{"fitness"},
+	}}}
+	tool := &PlanProgressUpdateTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+
+	_, err := tool.Execute(ctx, map[string]any{
+		"id":   "p1",
+		"tags": []any{"fitness", "nutrition"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fs.upserts) != 1 {
+		t.Fatalf("expected 1 upsert, got %d", len(fs.upserts))
+	}
+	got := fs.upserts[0].Tags
+	if len(got) != 2 || got[0] != "fitness" || got[1] != "nutrition" {
+		t.Errorf("unexpected tags %v", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// plan_upsert merge-preservation regression tests
+// ---------------------------------------------------------------------------
+
+// richPlan is a fully populated plan used across merge-preservation tests.
+var richPlan = store.UserPlan{
+	ID:     "plan-rich",
+	UserID: "u1",
+	Title:  "Exit corp gig",
+	Status: "active",
+	Vision: "Operate a profitable independent studio",
+	Target: "$1k/day",
+	Summary: "Working toward financial independence.",
+	Category: "work",
+	ReviewCadence: "weekly",
+	Tags:          []string{"career"},
+	DataSources:   []string{"github"},
+	Connectors:    []store.PlanConnector{{App: "github", Type: "personal_data_app"}},
+	Metrics:       map[string]any{"target_clients": float64(3)},
+	Milestones: []store.UserPlanMilestone{
+		{ID: "m1", Title: "Acquire pipeline", Tasks: []store.UserPlanTask{
+			{ID: "t1", Title: "Publish offer", Status: "done"},
+			{ID: "t2", Title: "Close first client", Status: "todo"},
+		}},
+	},
+	TrackedMetrics:  []store.PlanTrackedMetric{{Name: "monthly_revenue"}},
+	BaselineFacts:   []store.PlanFact{{Label: "start_mrr", Value: "$0"}},
+	SuccessCriteria: []string{"$1k/day sustained for 3 months"},
+	Cadence: []store.PlanCadenceEntry{
+		{Label: "mon", Activity: "weekly review"},
+	},
+	SupportingSections: []store.PlanSupportingSection{
+		{Title: "Resources", Kind: "list"},
+	},
+	Objectives: []string{"Grow pipeline", "Ship product"},
+	Principles: []string{"Ship small, learn fast"},
+}
+
+func TestPlanUpsertPartialUpdatePreservesStructuredFields(t *testing.T) {
+	fs := &fakePlanStore{plans: []store.UserPlan{richPlan}}
+	tool := &PlanUpsertTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+
+	// Only update title and status — every other field is absent from params.
+	_, err := tool.Execute(ctx, map[string]any{
+		"id":     "plan-rich",
+		"title":  "Exit corp gig",
+		"status": "active",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fs.upserts) != 1 {
+		t.Fatalf("expected 1 upsert, got %d", len(fs.upserts))
+	}
+	saved := fs.upserts[0]
+
+	// Structural fields must be preserved exactly as stored.
+	if len(saved.Milestones) != 1 || saved.Milestones[0].ID != "m1" {
+		t.Errorf("milestones clobbered: %+v", saved.Milestones)
+	}
+	if len(saved.Milestones[0].Tasks) != 2 {
+		t.Errorf("tasks clobbered: %+v", saved.Milestones[0].Tasks)
+	}
+	if len(saved.TrackedMetrics) != 1 || saved.TrackedMetrics[0].Name != "monthly_revenue" {
+		t.Errorf("tracked_metrics clobbered: %+v", saved.TrackedMetrics)
+	}
+	if len(saved.BaselineFacts) != 1 || saved.BaselineFacts[0].Label != "start_mrr" {
+		t.Errorf("baseline_facts clobbered: %+v", saved.BaselineFacts)
+	}
+	if len(saved.SuccessCriteria) != 1 {
+		t.Errorf("success_criteria clobbered: %+v", saved.SuccessCriteria)
+	}
+	if len(saved.Cadence) != 1 || saved.Cadence[0].Activity != "weekly review" {
+		t.Errorf("cadence clobbered: %+v", saved.Cadence)
+	}
+	if len(saved.SupportingSections) != 1 {
+		t.Errorf("supporting_sections clobbered: %+v", saved.SupportingSections)
+	}
+	if len(saved.Objectives) != 2 {
+		t.Errorf("objectives clobbered: %+v", saved.Objectives)
+	}
+	if len(saved.Principles) != 1 {
+		t.Errorf("principles clobbered: %+v", saved.Principles)
+	}
+	if v, _ := saved.Metrics["target_clients"].(float64); v != 3 {
+		t.Errorf("metrics clobbered: %+v", saved.Metrics)
+	}
+	if saved.Vision != "Operate a profitable independent studio" {
+		t.Errorf("vision clobbered: %q", saved.Vision)
+	}
+	if saved.Target != "$1k/day" {
+		t.Errorf("target clobbered: %q", saved.Target)
+	}
+	if saved.Category != "work" {
+		t.Errorf("category clobbered: %q", saved.Category)
+	}
+	if saved.ReviewCadence != "weekly" {
+		t.Errorf("review_cadence clobbered: %q", saved.ReviewCadence)
+	}
+	if len(saved.DataSources) == 0 {
+		t.Errorf("data_sources clobbered: %+v", saved.DataSources)
+	}
+	if len(saved.Connectors) == 0 {
+		t.Errorf("connectors clobbered: %+v", saved.Connectors)
+	}
+}
+
+func TestPlanUpsertPartialSummaryUpdatePreservesEverythingElse(t *testing.T) {
+	fs := &fakePlanStore{plans: []store.UserPlan{richPlan}}
+	tool := &PlanUpsertTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+
+	_, err := tool.Execute(ctx, map[string]any{
+		"id":      "plan-rich",
+		"title":   "Exit corp gig",
+		"summary": "Updated progress note.",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	saved := fs.upserts[0]
+
+	if saved.Summary != "Updated progress note." {
+		t.Errorf("summary not updated: %q", saved.Summary)
+	}
+	// Everything else untouched.
+	if len(saved.Milestones) != 1 {
+		t.Errorf("milestones clobbered: %+v", saved.Milestones)
+	}
+	if len(saved.TrackedMetrics) != 1 {
+		t.Errorf("tracked_metrics clobbered: %+v", saved.TrackedMetrics)
+	}
+	if saved.Vision != "Operate a profitable independent studio" {
+		t.Errorf("vision clobbered: %q", saved.Vision)
+	}
+}
+
+func TestPlanUpsertExplicitMilestonesOverwriteStoredOnes(t *testing.T) {
+	fs := &fakePlanStore{plans: []store.UserPlan{richPlan}}
+	tool := &PlanUpsertTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+
+	// Explicit milestones in params must replace the stored ones.
+	_, err := tool.Execute(ctx, map[string]any{
+		"id":    "plan-rich",
+		"title": "Exit corp gig",
+		"milestones": []any{
+			map[string]any{
+				"id":    "m2",
+				"title": "Land second client",
+				"tasks": []any{
+					map[string]any{"title": "Send proposal", "status": "todo"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	saved := fs.upserts[0]
+
+	if len(saved.Milestones) != 1 || saved.Milestones[0].ID != "m2" {
+		t.Errorf("expected explicit milestones, got: %+v", saved.Milestones)
+	}
+	// Non-milestone fields must still be preserved.
+	if saved.Vision != "Operate a profitable independent studio" {
+		t.Errorf("vision clobbered: %q", saved.Vision)
+	}
+	if len(saved.TrackedMetrics) != 1 {
+		t.Errorf("tracked_metrics clobbered: %+v", saved.TrackedMetrics)
+	}
+}
+
+func TestPlanUpsertNewPlanStartsFromZero(t *testing.T) {
+	fs := &fakePlanStore{} // empty — no existing plans
+	tool := &PlanUpsertTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+
+	_, err := tool.Execute(ctx, map[string]any{
+		"title":   "Brand new plan",
+		"summary": "Starting fresh.",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	saved := fs.upserts[0]
+
+	if saved.Title != "Brand new plan" {
+		t.Errorf("unexpected title: %q", saved.Title)
+	}
+	if saved.Summary != "Starting fresh." {
+		t.Errorf("unexpected summary: %q", saved.Summary)
+	}
+	if len(saved.Milestones) != 0 {
+		t.Errorf("expected no milestones on new plan, got %+v", saved.Milestones)
+	}
+	if saved.Vision != "" {
+		t.Errorf("expected empty vision on new plan, got %q", saved.Vision)
+	}
+}
+
+func TestPlanUpsertPreservesStatusWhenNotInParams(t *testing.T) {
+	existing := store.UserPlan{
+		ID:     "plan-paused",
+		UserID: "u1",
+		Title:  "Paused project",
+		Status: "paused",
+	}
+	fs := &fakePlanStore{plans: []store.UserPlan{existing}}
+	tool := &PlanUpsertTool{Store: fs}
+	ctx := WithUserID(context.Background(), "u1")
+
+	_, err := tool.Execute(ctx, map[string]any{
+		"id":      "plan-paused",
+		"title":   "Paused project",
+		"summary": "Still paused.",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fs.upserts[0].Status != "paused" {
+		t.Errorf("status clobbered to %q; expected paused", fs.upserts[0].Status)
 	}
 }

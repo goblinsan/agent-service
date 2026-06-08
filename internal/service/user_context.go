@@ -24,6 +24,7 @@ var personalContextToolNames = []string{
 	"memory_delete",
 	"plan_list",
 	"plan_upsert",
+	"plan_progress_update",
 	"plan_ingest_text",
 	"create_project_checkin",
 	"get_daily_rollup",
@@ -37,6 +38,7 @@ var personalContextToolNames = []string{
 var goalsContextToolNames = []string{
 	"plan_list",
 	"plan_upsert",
+	"plan_progress_update",
 	"plan_ingest_text",
 	"create_project_checkin",
 }
@@ -402,6 +404,7 @@ func (s *Service) ensureUserAndContext(ctx context.Context, userID string, conte
 		b.WriteString("\nGoals and plans: when the user states a new goal, commitment, or multi-step intent (e.g. \"I want to...\", \"help me track...\", \"my plan is...\"), call plan_upsert to record it. Call plan_list before creating a new plan to avoid duplicates and to recall existing plan ids. When the user reports progress on an existing plan, update it via plan_upsert with the same id and a revised steps array. Mark plans 'done' when finished or 'abandoned' when dropped.")
 		b.WriteString("\nWhen the user asks for project-manager-style guidance, planning help, or a goal review, call plan_list early in the run so you are using the latest durable plan state instead of stale assumptions. For day-specific guidance, trust the local_weekday/local_date above and the plan_list today_actions field over any inferred weekday from model memory.")
 		b.WriteString("\nWhen the user pastes a plan, roadmap, or text document from another system and wants it tracked, call plan_ingest_text to convert that text into a durable plan before giving follow-up guidance.")
+		b.WriteString("\nDuring scheduled check-ins, if you want to record a brief progress note or status change on an existing plan, use plan_progress_update (not plan_upsert). plan_progress_update only writes summary, status, and tags and never touches milestones, tasks, metrics, or other structural fields.")
 	}
 	if contextPolicy.PersonalData {
 		b.WriteString("\nWhen the user shares personal data app updates (for example Apple Health, Strava, or nutrition trackers), call plan_ingest_text with connector/connectors metadata so health and nutrition goals stay current in durable plans.")

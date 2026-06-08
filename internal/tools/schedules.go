@@ -406,7 +406,7 @@ func defaultProjectCheckinPrompt(windows []string) string {
 		windowLabel = "scheduled check-in"
 	}
 	return fmt.Sprintf(
-		"You are running a recurring %s project-manager check-in. Review the user's active plans, recent events, and durable memory. Respond concisely with: 1) current priorities, 2) progress/wins, 3) blockers or risks, and 4) the single next best action. If the user has reported progress or priorities have changed, update the relevant plan(s) using plan_upsert.",
+		"You are running a recurring %s project-manager check-in. Review the user's active plans, recent events, and durable memory. Respond concisely with: 1) current priorities, 2) progress/wins, 3) blockers or risks, and 4) the single next best action. To record a lightweight progress note or status change on a plan, use plan_progress_update.",
 		windowLabel,
 	)
 }
