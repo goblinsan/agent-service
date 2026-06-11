@@ -1,0 +1,63 @@
+name: Deploy On Merge
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Optional git revision to deploy instead of the current workflow SHA
+        required: false
+        type: string
+
+concurrency:
+  group: agent-service-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on:
+      - self-hosted
+      - gateway
+    env:
+      DEPLOY_REVISION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.revision || github.sha }}
+      # Host checkout used for production deploys. Defaults to the
+      # internal-stateful-service convention (/srv/apps/<repo>); override
+      # with a repository variable if this host checkout lives elsewhere.
+      DEPLOY_DIR: ${{ vars.AGENT_SERVICE_DEPLOY_DIR || '/srv/apps/agent-service' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_REVISION }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go build -o bin/agent-service ./cmd/agent-service
+
+      - name: Bootstrap host checkout if missing
+        run: |
+          if [[ ! -d "${DEPLOY_DIR}/.git" ]]; then
+            echo "No existing checkout at ${DEPLOY_DIR}; cloning"
+            mkdir -p "$(dirname "${DEPLOY_DIR}")"
+            # Use the job-scoped github.token only for the initial clone.
+            # Immediately rewrite origin to a credential-free HTTPS URL so no
+            # token is persisted in the host checkout's .git/config — that
+            # token would go stale before the next run's `git fetch origin`.
+            # Subsequent fetches rely on GitHub auth already configured for
+            # this host (see docs/deployment.md).
+            git clone "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" "${DEPLOY_DIR}"
+            git -C "${DEPLOY_DIR}" remote set-url origin "https://github.com/${{ github.repository }}.git"
+          fi
+
+      - name: Sync host checkout to target revision
+        run: |
+          git -C "${DEPLOY_DIR}" fetch origin
+          git -C "${DEPLOY_DIR}" checkout "${DEPLOY_REVISION}"
+
+      - name: Deploy agent-service
+        run: "${DEPLOY_DIR}/deploy/bin/deploy.sh"

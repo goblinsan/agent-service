@@ -10,6 +10,11 @@ A Go microservice that manages agent sessions and streaming runs.
 
 ## Quick Start
 
+> **Dev vs production:** the instructions below (`docker-compose.yml`) are
+> for local development and bundle a disposable Postgres. Production uses
+> `docker-compose.prod.yml` against the shared Postgres instance — see
+> [docs/deployment.md](docs/deployment.md).
+
 ### With Docker Compose
 
 ```bash
@@ -46,6 +51,20 @@ docker-compose up --build
 | `AGENT_MAX_STEPS` | `10`    | Maximum number of agent reasoning steps per run                          |
 | `API_KEY`         | —       | When set, enables `X-API-Key` authentication on all endpoints except `/health` and `/metrics` |
 | `MCP_ENDPOINT`    | —       | When set, enables the MCP tool runner targeting the given server URL     |
+| `CHAT_NODE`       | —       | Pins chat runs to the named node from `LLM_NODES`                        |
+| `AUTOMATION_NODE` | —       | Pins automation runs to the named node from `LLM_NODES`                  |
+| `AGENT_CATALOG_PATH` | —    | Path to a gateway-control-plane agent catalog JSON file                  |
+| `SCHEDULER_ENABLED` | `false` | Enables the background scheduler loop                                  |
+| `SCHEDULER_POLL_INTERVAL` | `15s` | How often due scheduled jobs are scanned                          |
+| `APNS_ENABLED`    | `false` | Enables APNs push notification dispatch                                  |
+| `APNS_ENV`        | `production` | APNs environment (`production` or `sandbox`)                        |
+| `APNS_TEAM_ID`    | —       | APNs team identifier                                                     |
+| `APNS_KEY_ID`     | —       | APNs auth key identifier                                                 |
+| `APNS_AUTH_KEY`   | —       | APNs auth key: PEM contents, or a path to a `.p8` file (recommended in production — see [docs/deployment.md](docs/deployment.md)) |
+| `APNS_TOPIC`      | —       | APNs topic (bundle ID)                                                   |
+
+Production deployments set these via a host-managed `.env` file — see
+[docs/deployment.md](docs/deployment.md) and `.env.example`.
 
 ## Makefile Targets
 
@@ -287,6 +306,10 @@ result, err := r.Execute(ctx, "my_tool", map[string]any{"key": "value"})
 
 This section documents the expected production deployment model, authentication
 assumptions, database requirements, and the contracts that callers must follow.
+
+For the concrete dev-vs-production Compose layout, required `.env` file,
+deploy script, CI/CD workflow, and rollback procedure, see
+[docs/deployment.md](docs/deployment.md).
 
 ### Internal Deployment Model
 

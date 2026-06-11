@@ -1,3 +1,6 @@
+# Local development stack: bundles a disposable Postgres alongside
+# agent-service. Not used in production — see docker-compose.prod.yml and
+# docs/deployment.md for the production deployment model.
 services:
   postgres:
     image: postgres:16-alpine

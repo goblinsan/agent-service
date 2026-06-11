@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    # main is validated by deploy-on-merge on the self-hosted gateway runner.
+    branches-ignore:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go build -o bin/agent-service ./cmd/agent-service

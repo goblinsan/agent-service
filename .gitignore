@@ -1,1 +1,7 @@
-bin/
+/bin/
+
+# Host-managed production runtime config (see .env.example)
+.env
+.env.*
+!.env.example
+config/
